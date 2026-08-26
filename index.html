@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>SqueakStack</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Nunito:wght@700;800&display=swap" rel="stylesheet">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html, body { height:100%; overflow:hidden; position:fixed; inset:0; width:100%;
+    overscroll-behavior:none; touch-action:none; background:#bfe3ff;
+    font-family:'Nunito',sans-serif; user-select:none; -webkit-user-select:none; }
+  canvas { position:absolute; inset:0; display:block; }
+  .display { font-family:'Fredoka',sans-serif; }
+
+  #hud { position:absolute; inset:0; pointer-events:none; display:flex; flex-direction:column; }
+  #top { display:flex; align-items:center; justify-content:center; gap:10px;
+    padding:calc(env(safe-area-inset-top, 0px) + 10px) 12px 0; }
+  .chip { font-family:'Fredoka',sans-serif; font-weight:600; font-size:15px; color:#fff;
+    padding:6px 14px; border-radius:999px; box-shadow:0 3px 0 rgba(0,0,0,.15); opacity:.55; transition:all .25s; }
+  .chip.turn { opacity:1; transform:scale(1.12); box-shadow:0 4px 0 rgba(0,0,0,.2); }
+  #banner { text-align:center; margin-top:10px; font-family:'Fredoka',sans-serif; font-weight:600;
+    font-size:19px; color:#274060; text-shadow:0 1px 0 rgba(255,255,255,.7); }
+  #hint { text-align:center; margin-top:2px; font-weight:800; font-size:12.5px; color:#4e6a8d; }
+
+  #bottom { margin-top:auto; display:flex; justify-content:center;
+    padding:0 0 calc(env(safe-area-inset-bottom, 0px) + 18px); }
+  #dropBtn { pointer-events:auto; font-family:'Fredoka',sans-serif; font-weight:700; font-size:26px;
+    letter-spacing:2px; color:#fff; background:#ff4f9a; border:none; border-radius:999px;
+    padding:18px 64px; box-shadow:0 7px 0 #c73374, 0 12px 24px rgba(0,0,0,.18); transition:transform .08s, box-shadow .08s; }
+  #dropBtn:active { transform:translateY(5px); box-shadow:0 2px 0 #c73374; }
+  #dropBtn:disabled { background:#b8c4d4; box-shadow:0 7px 0 #93a2b5; font-size:19px; letter-spacing:0; }
+
+  .overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    background:rgba(30,50,80,.35); backdrop-filter:blur(3px); z-index:10; }
+  .panel { background:#fffaf2; border-radius:28px; padding:28px 24px; width:min(88vw, 380px);
+    text-align:center; box-shadow:0 16px 40px rgba(0,0,0,.25); }
+  .panel h1 { font-family:'Fredoka',sans-serif; font-weight:700; font-size:34px; color:#274060; }
+  .panel .sub { font-weight:800; color:#7a8ba3; font-size:14px; margin:6px 0 18px; }
+  .nameRow { display:flex; align-items:center; gap:10px; margin-bottom:12px; }
+  .dot { width:22px; height:22px; border-radius:8px; flex:none; }
+  .nameRow input { flex:1; font-family:'Fredoka',sans-serif; font-weight:600; font-size:18px;
+    padding:12px 14px; border-radius:16px; border:2.5px solid #e5dccc; background:#fff; color:#274060; outline:none; }
+  .nameRow input:focus { border-color:#2f7bff; }
+  .bigBtn { font-family:'Fredoka',sans-serif; font-weight:700; font-size:22px; color:#fff;
+    background:#2f7bff; border:none; border-radius:999px; padding:14px 46px; margin-top:10px;
+    box-shadow:0 6px 0 #1d55c0; }
+  .bigBtn:active { transform:translateY(4px); box-shadow:0 2px 0 #1d55c0; }
+  #overTitle { font-size:26px; }
+  #overMsg { font-family:'Fredoka',sans-serif; font-weight:600; font-size:19px; color:#ff4f9a; margin-top:8px; }
+  #overScore { font-weight:800; color:#4e6a8d; margin-top:12px; font-size:15px; }
+  .hidden { display:none !important; }
+  #mute { position:absolute; top:calc(env(safe-area-inset-top,0px) + 8px); right:10px; z-index:5;
+    pointer-events:auto; background:rgba(255,255,255,.6); border:none; border-radius:12px;
+    font-size:17px; padding:6px 9px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">
+  <div id="top">
+    <span class="chip" id="chip0">P1</span>
+    <span style="font-size:20px">🐭</span>
+    <span class="chip" id="chip1">P2</span>
+  </div>
+  <div id="banner" class="display">&nbsp;</div>
+  <div id="hint">&nbsp;</div>
+  <div id="bottom"><button id="dropBtn" class="display">DROP</button></div>
+</div>
+<button id="mute">🔊</button>
+
+<div class="overlay" id="startOv">
+  <div class="panel">
+    <h1>Squeak<span style="color:#ff4f9a">Stack</span> 🐭</h1>
+    <div class="sub">Take turns stacking mice on the platform.<br>Knock one off the edge… and you lose!</div>
+    <div class="nameRow"><span class="dot" style="background:#ff6a3d"></span><input id="n0" maxlength="12" placeholder="Player 1"></div>
+    <div class="nameRow"><span class="dot" style="background:#2f7bff"></span><input id="n1" maxlength="12" placeholder="Player 2"></div>
+    <button class="bigBtn" id="startBtn">Play!</button>
+  </div>
+</div>
+
+<div class="overlay hidden" id="overOv">
+  <div class="panel">
+    <h1 id="overTitle" class="display">💥 Squeak!!</h1>
+    <div id="overMsg"></div>
+    <div id="overScore"></div>
+    <button class="bigBtn" id="againBtn" style="background:#12b981; box-shadow:0 6px 0 #0b7f58;">Play again</button>
+  </div>
+</div>
+
+<script src="matter.min.js"></script>
+<script src="game.js"></script>
+</body>
+</html>

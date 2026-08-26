@@ -4,10 +4,10 @@ const { Engine, Body, Bodies, Composite, Events, Sleeping } = Matter;
 
 // ---------- world constants ----------
 const WORLD_W = 420;               // logical width, x in [-210, 210]
-const PLAT_W = 250, PLAT_H = 24;   // platform top surface at y = 0
+const PLAT_W = 350, PLAT_H = 24;   // platform top surface at y = 0 (world is 420 wide - small air gap each side)
 const KILL_Y = 330;                // below this = fell off
 const SPAWN_GAP = 235;             // ghost hovers this far above stack top
-const SWAY_AMP = 165, SWAY_PERIOD = 2.3; // seconds
+const SWAY_AMP = 192, SWAY_PERIOD = 2.3; // sway reaches past the platform edges
 const START_LIVES = 3;
 
 const PLAYERS = [

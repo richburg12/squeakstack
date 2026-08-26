@@ -1,6 +1,6 @@
 /* SqueakStack — a two-player mouse-stacking physics game. */
 (() => {
-const { Engine, Body, Bodies, Composite, Events } = Matter;
+const { Engine, Body, Bodies, Composite, Events, Sleeping } = Matter;
 
 // ---------- world constants ----------
 const WORLD_W = 420;               // logical width, x in [-210, 210]
@@ -8,6 +8,7 @@ const PLAT_W = 250, PLAT_H = 24;   // platform top surface at y = 0
 const KILL_Y = 330;                // below this = fell off
 const SPAWN_GAP = 235;             // ghost hovers this far above stack top
 const SWAY_AMP = 165, SWAY_PERIOD = 2.3; // seconds
+const START_LIVES = 3;
 
 const PLAYERS = [
   { color:'#ff6a3d', body:'#ffa184', dark:'#c9522c', belly:'#ffdccf' },
@@ -59,11 +60,12 @@ const POSE_KEYS = Object.keys(POSES);
 
 // ---------- engine ----------
 const engine = Engine.create({ enableSleeping:true });
-engine.positionIterations = 10;
-engine.velocityIterations = 8;
+engine.positionIterations = 12;
+engine.velocityIterations = 10;
 const world = engine.world;
 
-const MOUSE_OPTS = { friction:0.9, frictionStatic:1.2, restitution:0.04, frictionAir:0.012, slop:0.02 };
+// restitution 0 + default slop: mice thud and stay put (no solver jitter-hop)
+const MOUSE_OPTS = { friction:0.9, frictionStatic:1.2, restitution:0, frictionAir:0.012, slop:0.05 };
 const platform = Bodies.rectangle(0, PLAT_H/2, PLAT_W, PLAT_H, { isStatic:true, friction:1, restitution:0 });
 Composite.add(world, platform);
 
@@ -80,6 +82,7 @@ function buildMouse(poseKey, x, y, playerIdx) {
     return b;
   });
   const body = Body.create({ parts, ...MOUSE_OPTS });
+  body.sleepThreshold = 30; // doze off quickly once still
   body.plugin.mouse = {
     pose: poseKey, player: playerIdx,
     off: { x: body.position.x - x, y: body.position.y - y }, // pose-origin -> COM
@@ -105,8 +108,10 @@ window.addEventListener('resize', resize); resize();
 
 // ---------- game state ----------
 const S = { screen:'start', names:['Player 1','Player 2'], wins:[0,0],
-  cur:0, dropper:0, ghost:null, target:0, disp:0, swayT:0, swayFrozen:null,
-  settleFrames:0, settleClock:0, loser:-1, shake:0, forcedPose:null };
+  lives:[START_LIVES, START_LIVES], cheese:[1,1], cheeseActive:false,
+  cheeseX:0, cheeseY:0, cheeseTgt:0, cheeseT:0, chaseX:0, chaseY:0, chaseVX:0, chaseVY:0,
+  cur:0, dropper:-99, ghost:null, target:0, disp:0, swayT:0, swayFrozen:null,
+  settleFrames:0, settleClock:0, loser:-1, shake:0, forcedPose:null, toastTo:0 };
 try {
   const sv = JSON.parse(localStorage.getItem('squeak') || '{}');
   if (sv.names) S.names = sv.names;
@@ -128,22 +133,34 @@ function pickPose() {
 }
 function newGhost() {
   const key = S.forcedPose || pickPose();
-  S.ghost = buildMouse(key, 0, stackTop() - SPAWN_GAP, S.cur);
+  const spawnY = stackTop() - SPAWN_GAP;
+  S.ghost = buildMouse(key, 0, spawnY, S.cur);
   S.target = 0; S.disp = 0; S.swayT = Math.random() * SWAY_PERIOD; S.swayFrozen = null;
+  // reset the cheese chase for this turn
+  S.cheeseX = 0; S.cheeseTgt = 0; S.cheeseT = 0;
+  S.chaseX = 0; S.chaseY = spawnY; S.chaseVX = 0; S.chaseVY = 0;
   updateHud();
 }
 function updateHud() {
+  clearTimeout(S.toastTo);
   for (const i of [0, 1]) {
     const c = $('chip' + i);
-    c.textContent = `${S.names[i]} · ${S.wins[i]}`;
+    c.textContent = `${S.names[i]} ${'♥'.repeat(Math.max(0, S.lives[i]))}${S.cheese[i] > 0 ? ' 🧀' : ''}`;
     c.style.background = PLAYERS[i].color;
     c.classList.toggle('turn', S.screen === 'aiming' && S.cur === i);
   }
-  const b = $('banner'), h = $('hint'), d = $('dropBtn');
+  const b = $('banner'), h = $('hint'), d = $('dropBtn'), cb = $('cheeseBtn');
+  cb.disabled = !(S.screen === 'aiming' && S.cheese[S.cur] > 0);
   if (S.screen === 'aiming' && S.ghost) {
-    b.textContent = `${S.names[S.cur]} — drop ${POSES[S.ghost.plugin.mouse.pose].label}!`;
-    b.style.color = PLAYERS[S.cur].color;
-    h.textContent = 'tap anywhere = spin 45° · green line = safe';
+    if (S.cheeseActive) {
+      b.textContent = `🧀 CHEESE CHAOS — ${S.names[S.cur]}, drop ${POSES[S.ghost.plugin.mouse.pose].label}!`;
+      b.style.color = '#c98a2b';
+      h.textContent = 'your mouse is chasing the cheese!! tap = spin 45°';
+    } else {
+      b.textContent = `${S.names[S.cur]} — drop ${POSES[S.ghost.plugin.mouse.pose].label}!`;
+      b.style.color = PLAYERS[S.cur].color;
+      h.textContent = 'tap anywhere = spin 45° · green line = safe';
+    }
     d.disabled = false; d.textContent = 'DROP';
   } else if (S.screen === 'settling') {
     b.textContent = '…wobble wobble…'; b.style.color = '#4e6a8d';
@@ -153,11 +170,19 @@ function updateHud() {
     h.innerHTML = '&nbsp;'; d.disabled = true; d.textContent = '…';
   } else { d.disabled = true; d.textContent = '…'; }
 }
+function toast(msg, color) {
+  const b = $('banner');
+  b.textContent = msg; b.style.color = color || '#ff4f5e';
+  clearTimeout(S.toastTo);
+  S.toastTo = setTimeout(updateHud, 1600);
+}
 
 // ---------- flow ----------
 function startGame() {
   for (const m of mice()) Composite.remove(world, m);
   S.screen = 'aiming'; S.loser = -1; camY = 0;
+  S.lives = [START_LIVES, START_LIVES]; S.cheese = [1, 1]; S.cheeseActive = false;
+  S.dropper = -99;
   newGhost();
   $('startOv').classList.add('hidden'); $('overOv').classList.add('hidden');
   updateHud();
@@ -171,28 +196,50 @@ function doDrop() {
   if (S.screen !== 'aiming' || !S.ghost) return;
   const g = S.ghost;
   Body.setAngle(g, S.target);           // snap to the chosen 45-degree step
-  Body.setVelocity(g, { x: 0, y: 0 }); Body.setAngularVelocity(g, 0);
+  const vx = S.cheeseActive ? Math.max(-8, Math.min(8, S.chaseVX)) : 0;
+  const vy = S.cheeseActive ? Math.max(0, S.chaseVY) : 0;
+  Body.setVelocity(g, { x: vx, y: vy }); // a cheese-frenzied mouse drops with its fling
+  Body.setAngularVelocity(g, 0);
   Composite.add(world, g);
-  for (const m of mice()) if (m.isSleeping) Matter.Sleeping.set(m, false);
-  S.ghost = null; S.dropper = S.cur;
+  for (const m of mice()) if (m.isSleeping) Sleeping.set(m, false);
+  S.ghost = null; S.dropper = S.cur; S.cheeseActive = false;
   S.screen = 'settling'; S.settleFrames = 0; S.settleClock = 0;
   sfx('drop');
   updateHud();
 }
+function playCheese() {
+  if (S.screen !== 'aiming' || S.cheese[S.cur] <= 0) return;
+  const player = S.cur;
+  S.cheese[player] = 0;
+  S.cheeseActive = true;
+  S.ghost = null;
+  sfx('cheese');
+  nextTurn();
+  toast(`🧀 ${S.names[player]} unleashed the CHEESE!`, '#c98a2b');
+}
 function nextTurn() {
+  for (const m of mice()) Sleeping.set(m, true); // freeze the settled pile - no idle rabble
   S.cur = 1 - S.cur;
   S.screen = 'aiming';
   newGhost();
 }
+function loseLife() {
+  S.lives[S.dropper]--;
+  S.shake = Math.max(S.shake, 9);
+  sfx('fall');
+  updateHud();
+  if (S.lives[S.dropper] <= 0) { gameOver(); return; }
+  toast(`💔 ${S.names[S.dropper]} lost a mouse! ${S.lives[S.dropper]} ${S.lives[S.dropper] === 1 ? 'life' : 'lives'} left`);
+}
 function gameOver() {
   if (S.screen === 'over') return;
-  S.screen = 'over'; S.loser = S.dropper; S.shake = 14;
+  S.screen = 'over'; S.loser = S.dropper; S.ghost = null; S.cheeseActive = false; S.shake = 14;
   const winner = 1 - S.loser;
   S.wins[winner]++; save();
   sfx('fall');
   setTimeout(() => sfx('win'), 700);
   setTimeout(() => {
-    $('overMsg').innerHTML = `<b style="color:${PLAYERS[S.loser].color}">${esc(S.names[S.loser])}</b> knocked a mouse off the edge!<br>🏆 <b style="color:${PLAYERS[winner].color}">${esc(S.names[winner])}</b> wins!`;
+    $('overMsg').innerHTML = `<b style="color:${PLAYERS[S.loser].color}">${esc(S.names[S.loser])}</b> dropped ${START_LIVES} mice off the edge!<br>🏆 <b style="color:${PLAYERS[winner].color}">${esc(S.names[winner])}</b> wins!`;
     $('overScore').textContent = `${S.names[0]} ${S.wins[0]} — ${S.wins[1]} ${S.names[1]}`;
     $('overOv').classList.remove('hidden');
   }, 1100);
@@ -212,22 +259,53 @@ function tick(now) {
   render();
 }
 function step(ms) {
-  // ghost sway + spin animation
+  // ghost movement
   if (S.screen === 'aiming' && S.ghost) {
     S.swayT += ms / 1000;
-    const x = S.swayFrozen != null ? S.swayFrozen : Math.sin(S.swayT * Math.PI * 2 / SWAY_PERIOD) * SWAY_AMP;
+    const spawnY = stackTop() - SPAWN_GAP;
+    let gx, gy = spawnY;
+    if (S.swayFrozen != null) {
+      gx = S.swayFrozen;
+    } else if (S.cheeseActive) {
+      // the cheese darts to random spots; the mouse spring-chases it, overshooting wildly
+      S.cheeseT -= ms / 1000;
+      if (S.cheeseT <= 0) { S.cheeseTgt = (Math.random() * 2 - 1) * SWAY_AMP; S.cheeseT = 0.28 + Math.random() * 0.45; }
+      S.cheeseX += (S.cheeseTgt - S.cheeseX) * 0.16;
+      S.cheeseY = spawnY - 55 + Math.sin(S.swayT * 6.3) * 30;
+      S.chaseVX += (S.cheeseX - S.chaseX) * 0.03; S.chaseVX *= 0.9;
+      S.chaseVY += (S.cheeseY + 55 - S.chaseY) * 0.03; S.chaseVY *= 0.9;
+      S.chaseX += S.chaseVX; S.chaseY += S.chaseVY;
+      gx = Math.max(-205, Math.min(205, S.chaseX));
+      gy = Math.max(spawnY - 45, Math.min(spawnY + 45, S.chaseY));
+    } else {
+      gx = Math.sin(S.swayT * Math.PI * 2 / SWAY_PERIOD) * SWAY_AMP;
+    }
     S.disp += (S.target - S.disp) * 0.22;
-    Body.setPosition(S.ghost, { x, y: stackTop() - SPAWN_GAP });
+    Body.setPosition(S.ghost, { x: gx, y: gy });
     Body.setAngle(S.ghost, S.disp);
   }
   Engine.update(engine, ms);
 
+  // micro-motion damper: bleed off tiny residual velocities so the pile can't buzz
+  for (const m of mice()) {
+    if (m === S.ghost || m.isSleeping) continue;
+    if (m.speed < 0.25 && m.angularSpeed < 0.035) {
+      Body.setVelocity(m, { x: m.velocity.x * 0.7, y: m.velocity.y * 0.7 });
+      Body.setAngularVelocity(m, m.angularVelocity * 0.7);
+    }
+  }
+
   // fell off? (during aiming too - a teetering mouse can still tumble; last dropper is to blame)
   if (S.screen === 'settling' || S.screen === 'aiming') {
-    for (const m of mice()) if (m !== S.ghost && m.position.y > KILL_Y) { gameOver(); return; }
+    for (const m of mice()) {
+      if (m !== S.ghost && m.position.y > KILL_Y) {
+        Composite.remove(world, m);
+        loseLife();
+        if (S.screen === 'over') return;
+      }
+    }
   }
   if (S.screen === 'settling') {
-    // settled?
     let calm = true;
     for (const m of mice()) if (!m.isSleeping && (m.speed > 0.18 || m.angularSpeed > 0.03)) calm = false;
     S.settleFrames = calm ? S.settleFrames + 1 : 0;
@@ -278,7 +356,11 @@ function render() {
 
   drawPlatform();
   for (const m of mice()) drawMouse(m, 1);
-  if (S.ghost) { drawGuide(S.ghost); drawMouse(S.ghost, 0.88); }
+  if (S.ghost) {
+    drawGuide(S.ghost);
+    drawMouse(S.ghost, 0.88);
+    if (S.cheeseActive && S.swayFrozen == null) drawCheese(S.cheeseX, S.cheeseY, S.swayT);
+  }
   ctx.restore();
 }
 
@@ -319,6 +401,22 @@ function drawGuide(g) {
   ctx.beginPath(); ctx.moveTo(x, w2sY(g.bounds.max.y) + 6);
   ctx.lineTo(x, overlaps ? w2sY(0) : H); ctx.stroke();
   ctx.setLineDash([]);
+}
+
+function drawCheese(x, y, t) {
+  ctx.save();
+  ctx.translate(w2sX(x), w2sY(y));
+  ctx.scale(scale, scale);
+  ctx.rotate(Math.sin(t * 9) * 0.3);
+  ctx.strokeStyle = '#cfa616'; ctx.lineWidth = 3; ctx.lineJoin = 'round';
+  ctx.fillStyle = '#ffd84d';
+  ctx.beginPath(); ctx.moveTo(-24, 14); ctx.lineTo(24, 14); ctx.lineTo(10, -18); ctx.closePath();
+  ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#e8b923';
+  for (const [hx, hy, hr] of [[0, 6, 4], [12, 9, 3], [-10, 9, 2.5]]) {
+    ctx.beginPath(); ctx.arc(hx, hy, hr, 0, 7); ctx.fill();
+  }
+  ctx.restore();
 }
 
 function partPath(p) {
@@ -427,6 +525,7 @@ function sfx(kind) {
   else if (kind === 'drop') blip(500, 250, 0, 0.14, 0.15, 'triangle');
   else if (kind === 'land') { blip(120, 60, 0, 0.1, 0.22, 'sine'); blip(1400, 900, 0.02, 0.09, 0.07); }
   else if (kind === 'fall') { blip(1300, 250, 0, 0.55, 0.22); blip(1500, 300, 0.08, 0.5, 0.12); }
+  else if (kind === 'cheese') { blip(300, 900, 0, 0.18, 0.16, 'sawtooth'); blip(900, 500, 0.16, 0.16, 0.14, 'sawtooth'); blip(500, 1200, 0.3, 0.2, 0.14, 'sawtooth'); }
   else if (kind === 'win') [660, 880, 990, 1320].forEach((f, i) => blip(f, f, i * 0.13, 0.14, 0.16, 'triangle'));
 }
 
@@ -434,6 +533,8 @@ function sfx(kind) {
 canvas.addEventListener('pointerdown', e => { unlock(); doRotate(); e.preventDefault(); });
 $('dropBtn').addEventListener('pointerdown', e => { unlock(); e.stopPropagation(); });
 $('dropBtn').addEventListener('click', () => { unlock(); doDrop(); });
+$('cheeseBtn').addEventListener('pointerdown', e => { unlock(); e.stopPropagation(); });
+$('cheeseBtn').addEventListener('click', () => { unlock(); playCheese(); });
 $('mute').addEventListener('click', e => { muted = !muted; e.target.textContent = muted ? '🔇' : '🔊'; });
 document.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('gesturestart', e => e.preventDefault());
@@ -459,7 +560,7 @@ requestAnimationFrame(tick);
 
 // test hooks
 window.__g = {
-  S, mice, drop: doDrop, rotate: doRotate,
+  S, mice, drop: doDrop, rotate: doRotate, playCheese,
   start(a, b) { S.names = [a || 'A', b || 'B']; S.cur = 0; startGame(); },
   freezeX(x) { S.swayFrozen = x; },
   pose(k) { S.forcedPose = k; },

@@ -64,10 +64,19 @@ engine.positionIterations = 12;
 engine.velocityIterations = 10;
 const world = engine.world;
 
-// restitution 0 + default slop: mice thud and stay put (no solver jitter-hop)
-const MOUSE_OPTS = { friction:0.9, frictionStatic:1.2, restitution:0, frictionAir:0.012, slop:0.05 };
-const platform = Bodies.rectangle(0, PLAT_H/2, PLAT_W, PLAT_H, { isStatic:true, friction:1, restitution:0 });
+// restitution 0 + generous slop: mice thud and stay put (no solver jitter-hop)
+const MOUSE_OPTS = { friction:0.9, frictionStatic:1.2, restitution:0, frictionAir:0.012, slop:0.08 };
+const platform = Bodies.rectangle(0, PLAT_H/2, PLAT_W, PLAT_H, { isStatic:true, friction:1, restitution:0, slop:0.08 });
 Composite.add(world, platform);
+
+// Soften penetration push-out: Matter corrects overlap by shoving positions,
+// and Verlet integration turns each shove into real upward velocity - a deep
+// fast landing then "resonates" (hop, land, shove, hop). Push out gentler and
+// carry less of the correction into the next frame.
+if (Matter.Resolver) {
+  Matter.Resolver._positionDampen = 0.6;
+  Matter.Resolver._positionWarming = 0.4;
+}
 
 function buildMouse(poseKey, x, y, playerIdx) {
   const pose = POSES[poseKey];
@@ -286,9 +295,17 @@ function step(ms) {
   }
   Engine.update(engine, ms);
 
-  // micro-motion damper: bleed off tiny residual velocities so the pile can't buzz
+  // post-solve velocity hygiene
   for (const m of mice()) {
     if (m === S.ghost || m.isSleeping) continue;
+    let vx = m.velocity.x, vy = m.velocity.y, fix = false;
+    // terminal fall speed: shallower penetration on landing = smaller correction pop
+    if (vy > 13) { vy = 13; fix = true; }
+    // anti-pop: mice never gain real upward velocity (restitution is 0), so any
+    // solver-invented hop gets clamped flat during play; game-over flings stay free
+    if (S.screen !== 'over' && vy < -1.5) { vy = -1.5; fix = true; }
+    if (fix) Body.setVelocity(m, { x: vx, y: vy });
+    // micro-motion damper: bleed off tiny residual velocities so the pile can't buzz
     if (m.speed < 0.25 && m.angularSpeed < 0.035) {
       Body.setVelocity(m, { x: m.velocity.x * 0.7, y: m.velocity.y * 0.7 });
       Body.setAngularVelocity(m, m.angularVelocity * 0.7);

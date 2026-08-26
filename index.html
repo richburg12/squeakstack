@@ -31,6 +31,11 @@
     transition:transform .08s, box-shadow .08s; }
   #cheeseBtn:active { transform:translateY(4px); box-shadow:0 1px 0 #cfa616; }
   #cheeseBtn:disabled { filter:grayscale(1); opacity:.4; box-shadow:0 5px 0 #93a2b5; }
+  #trapBtn { pointer-events:auto; font-size:28px; width:66px; height:66px; border-radius:50%;
+    border:none; background:#e0b184; box-shadow:0 5px 0 #a06c33, 0 10px 18px rgba(0,0,0,.15);
+    transition:transform .08s, box-shadow .08s; }
+  #trapBtn:active { transform:translateY(4px); box-shadow:0 1px 0 #a06c33; }
+  #trapBtn:disabled { filter:grayscale(1); opacity:.4; box-shadow:0 5px 0 #93a2b5; }
   #dropBtn { pointer-events:auto; font-family:'Fredoka',sans-serif; font-weight:700; font-size:26px;
     letter-spacing:2px; color:#fff; background:#ff4f9a; border:none; border-radius:999px;
     padding:18px 64px; box-shadow:0 7px 0 #c73374, 0 12px 24px rgba(0,0,0,.18); transition:transform .08s, box-shadow .08s; }
@@ -72,6 +77,7 @@
   <div id="banner" class="display">&nbsp;</div>
   <div id="hint">&nbsp;</div>
   <div id="bottom">
+    <button id="trapBtn" title="Place your trap!">🪤</button>
     <button id="cheeseBtn" title="Play your cheese!">🧀</button>
     <button id="dropBtn" class="display">DROP</button>
   </div>
@@ -81,7 +87,7 @@
 <div class="overlay" id="startOv">
   <div class="panel">
     <h1>Squeak<span style="color:#ff4f9a">Stack</span> 🐭</h1>
-    <div class="sub">Take turns stacking mice — you have ♥♥♥.<br>Each mouse you knock off costs a life!<br>Play your 🧀 to send your rival's mouse into a frenzy.</div>
+    <div class="sub">Take turns stacking mice — you have ♥♥♥.<br>Each mouse you knock off costs a life!<br>🧀 frenzies your rival's mouse · 🪤 launches whoever touches it<br>Build up to a floating ❤️ to win a life back.</div>
     <div class="nameRow"><span class="dot" style="background:#ff6a3d"></span><input id="n0" maxlength="12" placeholder="Player 1"></div>
     <div class="nameRow"><span class="dot" style="background:#2f7bff"></span><input id="n1" maxlength="12" placeholder="Player 2"></div>
     <button class="bigBtn" id="startBtn">Play!</button>

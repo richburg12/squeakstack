@@ -9,6 +9,8 @@ const KILL_Y = 330;                // below this = fell off
 const SPAWN_GAP = 235;             // ghost hovers this far above stack top
 const SWAY_AMP = 192, SWAY_PERIOD = 2.9; // sway reaches past the platform edges
 const START_LIVES = 3;
+const HEART_ABOVE = 105;           // heart floats this far above the stack top (tallest mouse on the peak just reaches)
+const TRAP_LAUNCH = 12.5;          // snap launch speed (apex lands near the top of the screen)
 
 const PLAYERS = [
   { color:'#ff6a3d', body:'#ffa184', dark:'#c9522c', belly:'#ffdccf' },
@@ -95,10 +97,21 @@ function buildMouse(poseKey, x, y, playerIdx) {
   body.plugin.mouse = {
     pose: poseKey, player: playerIdx,
     off: { x: body.position.x - x, y: body.position.y - y }, // pose-origin -> COM
-    landed: false,
+    landed: false, launch: 0,
   };
   return body;
 }
+function buildTrap(x, y, playerIdx) {
+  const base = Bodies.rectangle(x, y - 7, 72, 14, { ...MOUSE_OPTS, friction: 1 });
+  const body = Body.create({ parts: [base], ...MOUSE_OPTS, friction: 1 });
+  body.sleepThreshold = 30;
+  body.plugin.trap = {
+    by: playerIdx, armed: false, spent: false,
+    off: { x: body.position.x - x, y: body.position.y - y },
+  };
+  return body;
+}
+const pieces = () => Composite.allBodies(world).filter(b => b.plugin && (b.plugin.mouse || b.plugin.trap));
 const mice = () => Composite.allBodies(world).filter(b => b.plugin && b.plugin.mouse);
 
 // ---------- canvas / camera ----------
@@ -117,8 +130,9 @@ window.addEventListener('resize', resize); resize();
 
 // ---------- game state ----------
 const S = { screen:'start', names:['Player 1','Player 2'], wins:[0,0],
-  lives:[START_LIVES, START_LIVES], cheese:[1,1], cheeseActive:false,
+  lives:[START_LIVES, START_LIVES], cheese:[1,1], traps:[1,1], cheeseActive:false, ghostTrap:false,
   cheeseX:0, cheeseY:0, cheeseTgt:0, cheeseT:0, chaseX:0, chaseY:0, chaseVX:0, chaseVY:0,
+  heart:null, anims:[],
   cur:0, dropper:-99, ghost:null, target:0, disp:0, swayT:0, swayFrozen:null,
   settleFrames:0, settleClock:0, loser:-1, shake:0, forcedPose:null, toastTo:0 };
 try {
@@ -131,7 +145,7 @@ const $ = id => document.getElementById(id);
 function save() { localStorage.setItem('squeak', JSON.stringify({ names:S.names, wins:S.wins })); }
 function stackTop() {
   let t = 0;
-  for (const m of mice()) if (m !== S.ghost) t = Math.min(t, m.bounds.min.y);
+  for (const p of pieces()) if (p !== S.ghost) t = Math.min(t, p.bounds.min.y);
   return t;
 }
 function pickPose() {
@@ -144,6 +158,7 @@ function newGhost() {
   const key = S.forcedPose || pickPose();
   const spawnY = stackTop() - SPAWN_GAP;
   S.ghost = buildMouse(key, 0, spawnY, S.cur);
+  S.ghostTrap = false;
   S.target = 0; S.disp = 0; S.swayT = Math.random() * SWAY_PERIOD; S.swayFrozen = null;
   // reset the cheese chase for this turn
   S.cheeseX = 0; S.cheeseTgt = 0; S.cheeseT = 0;
@@ -154,14 +169,21 @@ function updateHud() {
   clearTimeout(S.toastTo);
   for (const i of [0, 1]) {
     const c = $('chip' + i);
-    c.textContent = `${S.names[i]} ${'♥'.repeat(Math.max(0, S.lives[i]))}${S.cheese[i] > 0 ? ' 🧀' : ''}`;
+    const cheeseIcons = S.cheese[i] > 0 ? ' ' + '🧀'.repeat(Math.min(S.cheese[i], 2)) : '';
+    c.textContent = `${S.names[i]} ${'♥'.repeat(Math.max(0, S.lives[i]))}${cheeseIcons}${S.traps[i] > 0 ? ' 🪤' : ''}`;
     c.style.background = PLAYERS[i].color;
     c.classList.toggle('turn', S.screen === 'aiming' && S.cur === i);
   }
-  const b = $('banner'), h = $('hint'), d = $('dropBtn'), cb = $('cheeseBtn');
-  cb.disabled = !(S.screen === 'aiming' && S.cheese[S.cur] > 0);
+  const b = $('banner'), h = $('hint'), d = $('dropBtn'), cb = $('cheeseBtn'), tb = $('trapBtn');
+  cb.disabled = !(S.screen === 'aiming' && S.cheese[S.cur] > 0 && !S.ghostTrap);
+  cb.textContent = S.cheese[S.cur] > 1 ? '🧀+' : '🧀';
+  tb.disabled = !(S.screen === 'aiming' && S.traps[S.cur] > 0 && !S.ghostTrap);
   if (S.screen === 'aiming' && S.ghost) {
-    if (S.cheeseActive) {
+    if (S.ghostTrap) {
+      b.textContent = `🪤 ${S.names[S.cur]} — place your TRAP!`;
+      b.style.color = '#8a5a26';
+      h.textContent = 'no spinning traps — just time the DROP';
+    } else if (S.cheeseActive) {
       b.textContent = `🧀 CHEESE CHAOS — ${S.names[S.cur]}, drop ${POSES[S.ghost.plugin.mouse.pose].label}!`;
       b.style.color = '#c98a2b';
       h.textContent = 'your mouse is chasing the cheese!! tap = spin 45°';
@@ -188,9 +210,10 @@ function toast(msg, color) {
 
 // ---------- flow ----------
 function startGame() {
-  for (const m of mice()) Composite.remove(world, m);
+  for (const p of pieces()) Composite.remove(world, p);
   S.screen = 'aiming'; S.loser = -1; camY = 0;
-  S.lives = [START_LIVES, START_LIVES]; S.cheese = [1, 1]; S.cheeseActive = false;
+  S.lives = [START_LIVES, START_LIVES]; S.cheese = [1, 1]; S.traps = [1, 1];
+  S.cheeseActive = false; S.heart = null; S.anims = [];
   S.dropper = -99;
   newGhost();
   $('startOv').classList.add('hidden'); $('overOv').classList.add('hidden');
@@ -198,39 +221,84 @@ function startGame() {
 }
 function doRotate() {
   if (S.screen !== 'aiming') return;
+  if (S.ghostTrap) { sfx('nope'); return; }  // traps don't spin
   S.target += Math.PI / 4;
   sfx('spin');
 }
 function doDrop() {
   if (S.screen !== 'aiming' || !S.ghost) return;
   const g = S.ghost;
-  Body.setAngle(g, S.target);           // snap to the chosen 45-degree step
+  Body.setAngle(g, S.ghostTrap ? 0 : S.target); // snap to the chosen 45-degree step
   const vx = S.cheeseActive ? Math.max(-8, Math.min(8, S.chaseVX)) : 0;
   const vy = S.cheeseActive ? Math.max(0, S.chaseVY) : 0;
   Body.setVelocity(g, { x: vx, y: vy }); // a cheese-frenzied mouse drops with its fling
   Body.setAngularVelocity(g, 0);
   Composite.add(world, g);
-  for (const m of mice()) if (m.isSleeping) Sleeping.set(m, false);
-  S.ghost = null; S.dropper = S.cur; S.cheeseActive = false;
+  for (const p of pieces()) if (p.isSleeping) Sleeping.set(p, false);
+  S.ghost = null; S.ghostTrap = false; S.dropper = S.cur; S.cheeseActive = false;
   S.screen = 'settling'; S.settleFrames = 0; S.settleClock = 0;
   sfx('drop');
   updateHud();
 }
 function playCheese() {
-  if (S.screen !== 'aiming' || S.cheese[S.cur] <= 0) return;
+  if (S.screen !== 'aiming' || S.cheese[S.cur] <= 0 || S.ghostTrap) return;
   const player = S.cur;
-  S.cheese[player] = 0;
+  S.cheese[player]--;
   S.cheeseActive = true;
   S.ghost = null;
   sfx('cheese');
   nextTurn();
   toast(`🧀 ${S.names[player]} unleashed the CHEESE!`, '#c98a2b');
 }
+function playTrap() {
+  if (S.screen !== 'aiming' || S.traps[S.cur] <= 0 || S.ghostTrap) return;
+  S.traps[S.cur]--;
+  S.ghostTrap = true;
+  S.ghost = buildTrap(0, stackTop() - SPAWN_GAP, S.cur);
+  S.target = 0; S.disp = 0;
+  sfx('trapset');
+  updateHud();
+}
 function nextTurn() {
-  for (const m of mice()) Sleeping.set(m, true); // freeze the settled pile - no idle rabble
+  for (const p of pieces()) Sleeping.set(p, true); // freeze the settled pile - no idle rabble
+  for (const p of pieces()) if (p.plugin.trap && !p.plugin.trap.spent) p.plugin.trap.armed = true; // traps go live once placed and settled
+  maybeSpawnHeart();
   S.cur = 1 - S.cur;
   S.screen = 'aiming';
   newGhost();
+}
+function maybeSpawnHeart() {
+  if (S.heart || (S.lives[0] >= START_LIVES && S.lives[1] >= START_LIVES)) return;
+  if (Math.random() > 0.35) return;
+  S.heart = { x: (Math.random() * 2 - 1) * (PLAT_W / 2 - 45), y: stackTop() - HEART_ABOVE, t: 0 };
+}
+function collectHeart(pIdx) {
+  const h = S.heart; S.heart = null;
+  if (S.lives[pIdx] < START_LIVES) {
+    S.lives[pIdx]++;
+    S.anims.push({ kind: 'heart', x: h.x, y: h.y, t: 0, side: pIdx });
+    toast(`❤️ ${S.names[pIdx]} got a life back!`, PLAYERS[pIdx].color);
+    sfx('heart');
+  } else {
+    S.cheese[pIdx]++;
+    S.anims.push({ kind: 'toCheese', x: h.x, y: h.y, t: 0, side: pIdx });
+    toast(`❤️→🧀 ${S.names[pIdx]} banked a bonus cheese!`, '#c98a2b');
+    sfx('heart'); setTimeout(() => sfx('cheese'), 350);
+  }
+  updateHud();
+}
+function snapTrap(trap, m) {
+  const tp = trap.plugin.trap;
+  tp.spent = true; tp.armed = false;
+  const ang = (Math.random() * 2 - 1) * (15 * Math.PI / 180); // up to 15 degrees off vertical
+  Sleeping.set(m, false);
+  Body.setVelocity(m, { x: Math.sin(ang) * TRAP_LAUNCH + m.velocity.x * 0.2, y: -Math.cos(ang) * TRAP_LAUNCH });
+  Body.setAngularVelocity(m, (Math.random() * 2 - 1) * 0.25);
+  m.plugin.mouse.launch = 110; // frames of anti-pop exemption while airborne
+  S.shake = Math.max(S.shake, 11);
+  if (S.screen === 'settling') S.settleFrames = 0;
+  sfx('snap');
+  toast('🪤 SNAP!!', '#c0392b');
 }
 function loseLife() {
   S.lives[S.dropper]--;
@@ -242,7 +310,7 @@ function loseLife() {
 }
 function gameOver() {
   if (S.screen === 'over') return;
-  S.screen = 'over'; S.loser = S.dropper; S.ghost = null; S.cheeseActive = false; S.shake = 14;
+  S.screen = 'over'; S.loser = S.dropper; S.ghost = null; S.cheeseActive = false; S.heart = null; S.shake = 14;
   const winner = 1 - S.loser;
   S.wins[winner]++; save();
   sfx('fall');
@@ -291,40 +359,63 @@ function step(ms) {
     }
     S.disp += (S.target - S.disp) * 0.22;
     Body.setPosition(S.ghost, { x: gx, y: gy });
-    Body.setAngle(S.ghost, S.disp);
+    Body.setAngle(S.ghost, S.ghostTrap ? 0 : S.disp);
   }
   Engine.update(engine, ms);
 
   // post-solve velocity hygiene
-  for (const m of mice()) {
-    if (m === S.ghost || m.isSleeping) continue;
-    let vx = m.velocity.x, vy = m.velocity.y, fix = false;
+  for (const p of pieces()) {
+    if (p === S.ghost || p.isSleeping) continue;
+    const mp = p.plugin.mouse;
+    const launched = mp && mp.launch > 0;
+    if (launched) mp.launch--;
+    let vx = p.velocity.x, vy = p.velocity.y, fix = false;
     // terminal fall speed: shallower penetration on landing = smaller correction pop
     if (vy > 13) { vy = 13; fix = true; }
-    // anti-pop: mice never gain real upward velocity (restitution is 0), so any
-    // solver-invented hop gets clamped flat during play; game-over flings stay free
-    if (S.screen !== 'over' && vy < -1.5) { vy = -1.5; fix = true; }
-    if (fix) Body.setVelocity(m, { x: vx, y: vy });
+    // anti-pop: pieces never gain real upward velocity (restitution is 0), so any
+    // solver-invented hop gets clamped flat during play; trap launches and
+    // game-over flings stay free
+    if (S.screen !== 'over' && !launched && vy < -0.9) { vy = -0.9; fix = true; }
+    if (fix) Body.setVelocity(p, { x: vx, y: vy });
     // micro-motion damper: bleed off tiny residual velocities so the pile can't buzz
-    if (m.speed < 0.25 && m.angularSpeed < 0.035) {
-      Body.setVelocity(m, { x: m.velocity.x * 0.7, y: m.velocity.y * 0.7 });
-      Body.setAngularVelocity(m, m.angularVelocity * 0.7);
+    if (p.speed < 0.25 && p.angularSpeed < 0.035) {
+      Body.setVelocity(p, { x: p.velocity.x * 0.7, y: p.velocity.y * 0.7 });
+      Body.setAngularVelocity(p, p.angularVelocity * 0.7);
     }
   }
 
-  // fell off? (during aiming too - a teetering mouse can still tumble; last dropper is to blame)
-  if (S.screen === 'settling' || S.screen === 'aiming') {
+  // heart pickup: only a slow (settled or apex-drifting) mouse can grab it -
+  // things falling past at speed zoom right through, so you have to build to it
+  if (S.heart && S.screen !== 'over') {
+    S.heart.t += ms / 1000;
     for (const m of mice()) {
-      if (m !== S.ghost && m.position.y > KILL_Y) {
-        Composite.remove(world, m);
-        loseLife();
-        if (S.screen === 'over') return;
+      if (m === S.ghost || m.speed > 2.5) continue;
+      const bx = Math.max(m.bounds.min.x, Math.min(S.heart.x, m.bounds.max.x));
+      const by = Math.max(m.bounds.min.y, Math.min(S.heart.y, m.bounds.max.y));
+      const dx = bx - S.heart.x, dy = by - S.heart.y;
+      if (dx * dx + dy * dy < 24 * 24) { collectHeart(m.plugin.mouse.player); break; }
+    }
+  }
+  for (const a of S.anims) a.t += ms / 1000;
+  S.anims = S.anims.filter(a => a.t < 1.25);
+
+  // fell off? (during aiming too - a teetering piece can still tumble; last dropper is to blame)
+  if (S.screen === 'settling' || S.screen === 'aiming') {
+    for (const p of pieces()) {
+      if (p !== S.ghost && p.position.y > KILL_Y) {
+        Composite.remove(world, p);
+        if (p.plugin.mouse) {
+          loseLife();
+          if (S.screen === 'over') return;
+        } else {
+          toast(`🪤 the trap fell into the void!`, '#8a5a26');
+        }
       }
     }
   }
   if (S.screen === 'settling') {
     let calm = true;
-    for (const m of mice()) if (!m.isSleeping && (m.speed > 0.18 || m.angularSpeed > 0.03)) calm = false;
+    for (const p of pieces()) if (!p.isSleeping && (p.speed > 0.18 || p.angularSpeed > 0.03)) calm = false;
     S.settleFrames = calm ? S.settleFrames + 1 : 0;
     S.settleClock += ms;
     if (S.settleFrames >= 45 || S.settleClock > 9000) nextTurn();
@@ -332,8 +423,27 @@ function step(ms) {
 }
 Events.on(engine, 'collisionStart', ev => {
   for (const pair of ev.pairs) {
-    for (const b of [pair.bodyA.parent, pair.bodyB.parent]) {
-      if (b.plugin && b.plugin.mouse && !b.plugin.mouse.landed) { b.plugin.mouse.landed = true; sfx('land'); }
+    const A = pair.bodyA.parent, B = pair.bodyB.parent;
+    for (const b of [A, B]) {
+      if (!b.plugin || !b.plugin.mouse) continue;
+      const mp = b.plugin.mouse;
+      // impact absorption: on its first touch (or on re-landing after a trap
+      // launch) a mouse dumps most of its momentum - beanbag thud, not a
+      // bouncing block. An upright landing stays upright instead of twisting over.
+      if (!mp.landed || (mp.launch > 0 && mp.launch < 100)) {
+        Body.setVelocity(b, { x: b.velocity.x * 0.35, y: Math.max(0, b.velocity.y) * 0.25 });
+        Body.setAngularVelocity(b, b.angularVelocity * 0.4);
+        if (!mp.landed) { mp.landed = true; }
+        mp.launch = 0;
+        sfx('land');
+      }
+    }
+    // armed trap + mouse = SNAP
+    const trap = (A.plugin && A.plugin.trap && A.plugin.trap.armed && !A.plugin.trap.spent) ? A
+               : (B.plugin && B.plugin.trap && B.plugin.trap.armed && !B.plugin.trap.spent) ? B : null;
+    if (trap) {
+      const other = trap === A ? B : A;
+      if (other.plugin && other.plugin.mouse) snapTrap(trap, other);
     }
   }
 });
@@ -372,13 +482,15 @@ function render() {
   }
 
   drawPlatform();
-  for (const m of mice()) drawMouse(m, 1);
+  for (const p of pieces()) p.plugin.mouse ? drawMouse(p, 1) : drawTrap(p, 1);
+  if (S.heart) drawHeart();
   if (S.ghost) {
     drawGuide(S.ghost);
-    drawMouse(S.ghost, 0.88);
+    S.ghostTrap ? drawTrap(S.ghost, 0.88) : drawMouse(S.ghost, 0.88);
     if (S.cheeseActive && S.swayFrozen == null) drawCheese(S.cheeseX, S.cheeseY, S.swayT);
   }
   ctx.restore();
+  drawAnims(); // screen-space, unshaken
 }
 
 function drawPlatform() {
@@ -425,6 +537,11 @@ function drawCheese(x, y, t) {
   ctx.translate(w2sX(x), w2sY(y));
   ctx.scale(scale, scale);
   ctx.rotate(Math.sin(t * 9) * 0.3);
+  cheeseWedge(1);
+  ctx.restore();
+}
+function cheeseWedge(s) {
+  ctx.save(); ctx.scale(s, s);
   ctx.strokeStyle = '#cfa616'; ctx.lineWidth = 3; ctx.lineJoin = 'round';
   ctx.fillStyle = '#ffd84d';
   ctx.beginPath(); ctx.moveTo(-24, 14); ctx.lineTo(24, 14); ctx.lineTo(10, -18); ctx.closePath();
@@ -435,7 +552,87 @@ function drawCheese(x, y, t) {
   }
   ctx.restore();
 }
-
+function heartShape(s) {
+  ctx.beginPath();
+  ctx.moveTo(0, s);
+  ctx.bezierCurveTo(-s * 1.25, s * 0.05, -s * 0.72, -s * 0.95, 0, -s * 0.38);
+  ctx.bezierCurveTo(s * 0.72, -s * 0.95, s * 1.25, s * 0.05, 0, s);
+  ctx.closePath();
+}
+function drawHeart() {
+  const h = S.heart;
+  const pulse = 1 + 0.12 * Math.sin(h.t * 4.2);
+  ctx.save();
+  ctx.translate(w2sX(h.x), w2sY(h.y + Math.sin(h.t * 1.8) * 4));
+  ctx.scale(scale * pulse, scale * pulse);
+  // sparkle ring
+  ctx.strokeStyle = 'rgba(255,255,255,0.65)';
+  ctx.lineWidth = 2; ctx.setLineDash([3, 7]);
+  ctx.beginPath(); ctx.arc(0, 0, 26, h.t * 0.9, h.t * 0.9 + 7); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#ff4f7e'; ctx.strokeStyle = '#d12b5c'; ctx.lineWidth = 3; ctx.lineJoin = 'round';
+  heartShape(16); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = 'rgba(255,255,255,0.75)';
+  ctx.beginPath(); ctx.arc(-6, -8, 3.4, 0, 7); ctx.fill();
+  ctx.restore();
+}
+function drawTrap(m, alpha) {
+  const tp = m.plugin.trap;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(w2sX(m.position.x), w2sY(m.position.y));
+  ctx.scale(scale, scale);
+  ctx.rotate(m.angle);
+  ctx.translate(-tp.off.x, -tp.off.y);
+  // wooden base
+  ctx.fillStyle = '#c78a4b'; ctx.strokeStyle = '#8a5a26'; ctx.lineWidth = 3; ctx.lineJoin = 'round';
+  rrect(-36, -14, 72, 14, 4); ctx.fill(); rrect(-36, -14, 72, 14, 4); ctx.stroke();
+  ctx.strokeStyle = 'rgba(138,90,38,0.45)'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(-30, -7); ctx.lineTo(30, -7); ctx.stroke();
+  // cheese bait
+  ctx.fillStyle = '#ffd84d'; ctx.strokeStyle = '#cfa616'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(4, -14); ctx.lineTo(18, -14); ctx.lineTo(12, -26); ctx.closePath(); ctx.fill(); ctx.stroke();
+  // metal bar
+  ctx.strokeStyle = '#8b95a1'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+  if (!tp.spent) {
+    ctx.beginPath(); ctx.arc(-12, -14, 22, Math.PI, Math.PI * 1.5); ctx.stroke(); // bar standing upright
+  } else {
+    ctx.beginPath(); ctx.moveTo(-8, -17); ctx.lineTo(34, -17); ctx.stroke();      // snapped flat
+  }
+  // hinge
+  ctx.fillStyle = tp.armed ? '#ff4f5e' : '#a05c2c';
+  ctx.beginPath(); ctx.arc(-31, -11, 3.6, 0, 7); ctx.fill();
+  ctx.restore();
+}
+function drawAnims() {
+  for (const a of S.anims) {
+    const t = a.t;
+    const sx0 = w2sX(a.x), sy0 = w2sY(a.y);
+    const tx = a.side === 0 ? W * 0.27 : W * 0.73, ty = 46;
+    let x = sx0, y = sy0, sc = 1;
+    if (t < 0.45) { sc = 1 + t * 2.2; }
+    else {
+      const k = Math.min(1, (t - 0.45) / 0.65), e = k * k * (3 - 2 * k);
+      x = sx0 + (tx - sx0) * e; y = sy0 + (ty - sy0) * e; sc = 2 - 1.2 * e;
+    }
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(scale * sc * 0.85, scale * sc * 0.85);
+    const showCheese = a.kind === 'toCheese' && t > 0.45;
+    if (a.kind === 'toCheese' && t > 0.3 && t < 0.7) {
+      // conversion flash ring
+      ctx.strokeStyle = `rgba(255,216,77,${1 - Math.abs(t - 0.5) * 4})`;
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(0, 0, 22 + (t - 0.3) * 60, 0, 7); ctx.stroke();
+    }
+    if (showCheese) cheeseWedge(0.75);
+    else {
+      ctx.fillStyle = '#ff4f7e'; ctx.strokeStyle = '#d12b5c'; ctx.lineWidth = 3;
+      heartShape(15); ctx.fill(); ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
 function partPath(p) {
   if (p[0] === 'c') { ctx.beginPath(); ctx.arc(p[1], p[2], p[3], 0, 7); }
   else if (p[0] === 'e') { ctx.beginPath(); ctx.ellipse(p[1], p[2], p[3], p[4], p[5] || 0, 0, 7); }
@@ -539,10 +736,14 @@ function blip(f0, f1, t0, dur, vol, type) {
 }
 function sfx(kind) {
   if (kind === 'spin') blip(700, 1050, 0, 0.08, 0.12, 'triangle');
+  else if (kind === 'nope') blip(240, 170, 0, 0.1, 0.12, 'triangle');
   else if (kind === 'drop') blip(500, 250, 0, 0.14, 0.15, 'triangle');
   else if (kind === 'land') { blip(120, 60, 0, 0.1, 0.22, 'sine'); blip(1400, 900, 0.02, 0.09, 0.07); }
   else if (kind === 'fall') { blip(1300, 250, 0, 0.55, 0.22); blip(1500, 300, 0.08, 0.5, 0.12); }
   else if (kind === 'cheese') { blip(300, 900, 0, 0.18, 0.16, 'sawtooth'); blip(900, 500, 0.16, 0.16, 0.14, 'sawtooth'); blip(500, 1200, 0.3, 0.2, 0.14, 'sawtooth'); }
+  else if (kind === 'trapset') { blip(700, 300, 0, 0.07, 0.16, 'square'); blip(300, 500, 0.07, 0.06, 0.1, 'square'); }
+  else if (kind === 'snap') { blip(180, 70, 0, 0.07, 0.3, 'square'); blip(2200, 400, 0.01, 0.14, 0.2); blip(900, 1800, 0.05, 0.2, 0.12, 'triangle'); }
+  else if (kind === 'heart') { blip(660, 990, 0, 0.12, 0.15, 'triangle'); blip(990, 1320, 0.11, 0.16, 0.15, 'triangle'); }
   else if (kind === 'win') [660, 880, 990, 1320].forEach((f, i) => blip(f, f, i * 0.13, 0.14, 0.16, 'triangle'));
 }
 
@@ -552,6 +753,8 @@ $('dropBtn').addEventListener('pointerdown', e => { unlock(); e.stopPropagation(
 $('dropBtn').addEventListener('click', () => { unlock(); doDrop(); });
 $('cheeseBtn').addEventListener('pointerdown', e => { unlock(); e.stopPropagation(); });
 $('cheeseBtn').addEventListener('click', () => { unlock(); playCheese(); });
+$('trapBtn').addEventListener('pointerdown', e => { unlock(); e.stopPropagation(); });
+$('trapBtn').addEventListener('click', () => { unlock(); playTrap(); });
 $('mute').addEventListener('click', e => { muted = !muted; e.target.textContent = muted ? '🔇' : '🔊'; });
 document.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('gesturestart', e => e.preventDefault());
@@ -577,9 +780,10 @@ requestAnimationFrame(tick);
 
 // test hooks
 window.__g = {
-  S, mice, drop: doDrop, rotate: doRotate, playCheese,
+  S, mice, pieces, drop: doDrop, rotate: doRotate, playCheese, playTrap,
   start(a, b) { S.names = [a || 'A', b || 'B']; S.cur = 0; startGame(); },
   freezeX(x) { S.swayFrozen = x; },
   pose(k) { S.forcedPose = k; },
+  heart(x, y) { S.heart = { x, y, t: 0 }; },
 };
 })();

@@ -1,6 +1,8 @@
 /* SqueakStack — a two-player mouse-stacking physics game. */
 (() => {
 const { Engine, Body, Bodies, Composite, Events, Sleeping } = Matter;
+// concave-outline support: single clean silhouette per mouse (see outlines.js)
+if (typeof decomp !== 'undefined' && Matter.Common.setDecomp) Matter.Common.setDecomp(decomp);
 
 // ---------- world constants ----------
 const WORLD_W = 420;               // logical width, x in [-210, 210]
@@ -25,11 +27,11 @@ const POSES = {
   tidy: { label:'Pip', w:3,
     parts:[ ['e',0,-19,24,19,0], ['c',15,-33,12], ['c',9,-46,5.5,'ear'], ['c',20,-44,5,'ear'], ['r',2,-5,40,10,0] ],
     face:[15,-33,12,-0.15], belly:[2,-13,13,8],
-    tail:{pts:[[-18,-5],[4,4],[27,-7]], w:5} },
+    tail:{pts:[[-18,-8],[4,-3],[27,-9]], w:5} },
   stand: { label:'Tippy', w:2,
-    parts:[ ['e',0,-36,15,26,0], ['c',3,-70,12], ['c',-3,-83,6,'ear'], ['c',9,-81,5.5,'ear'], ['r',0,-6,26,12,0] ],
+    parts:[ ['e',0,-36,15,26,0], ['c',3,-70,12], ['c',-3,-83,6,'ear'], ['c',9,-81,5.5,'ear'], ['r',0,-6,30,12,0] ],
     face:[3,-70,12,-0.35], belly:[1,-30,9,16], feet:[[-7,-3],[7,-3]],
-    tail:{pts:[[-2,-8],[-24,-2],[-30,-14]], w:5} },
+    tail:{pts:[[-2,-12],[-22,-8],[-30,-18]], w:5} },
   ball: { label:'Bobble', w:1.5,
     parts:[ ['c',0,-24,24], ['c',-8,-44,5.5,'ear'] ],
     face:[6,-26,10,0.55,'sleep'],
@@ -45,7 +47,7 @@ const POSES = {
   hook: { label:'Hooky', w:1.5,
     parts:[ ['e',6,-24,17,22,0], ['c',16,-49,11], ['c',10,-60,5,'ear'], ['c',22,-58,5,'ear'], ['r',6,-4,30,8,0] ],
     face:[16,-49,11,-0.3], belly:[7,-18,10,13], feet:[[-1,-2],[13,-2]],
-    tail:{pts:[[-10,-20],[-11,-53],[-25,-44]], w:6} },
+    tail:{pts:[[-11,-26],[-15,-58],[-28,-42]], w:6} },
   chonk: { label:'Chonk', w:2,
     parts:[ ['e',-2,-30,33,23,0], ['c',28,-42,15], ['c',22,-59,7,'ear'], ['c',35,-56,6.5,'ear'],
             ['r',-18,-6,12,12,0], ['r',14,-6,12,12,0] ],
@@ -80,46 +82,18 @@ if (Matter.Resolver) {
 }
 
 function buildMouse(poseKey, x, y, playerIdx) {
-  const pose = POSES[poseKey];
-  const parts = pose.parts.map(p => {
-    if (p[0] === 'c') return Bodies.circle(x + p[1], y + p[2], p[3], { ...MOUSE_OPTS });
-    if (p[0] === 'r') {
-      // rounded corners: no invisible sharp corner to perch on
-      const ch = Math.min(p[3], p[4]) >= 8 ? { chamfer: { radius: 3 } } : {};
-      return Bodies.rectangle(x + p[1], y + p[2], p[3], p[4], { ...MOUSE_OPTS, ...ch, angle: p[5] || 0 });
-    }
-    // ellipse: scaled circle
-    const r = Math.max(p[3], p[4]);
-    const b = Bodies.circle(x + p[1], y + p[2], r, { ...MOUSE_OPTS });
-    Body.scale(b, p[3] / r, p[4] / r);
-    if (p[5]) Body.rotate(b, p[5]);
-    return b;
-  });
-  // solid tail: physics segments sampled from the same curve the art draws,
-  // so tails rest on ledges, catch, and hang instead of passing through things
-  if (pose.tail) {
-    const [p0, cp, p2] = pose.tail.pts;
-    const q = t => ({
-      x: (1 - t) * (1 - t) * p0[0] + 2 * (1 - t) * t * cp[0] + t * t * p2[0],
-      y: (1 - t) * (1 - t) * p0[1] + 2 * (1 - t) * t * cp[1] + t * t * p2[1],
-    });
-    let prev = q(0);
-    for (let i = 1; i <= 3; i++) {
-      const pt = q(i / 3);
-      const len = Math.hypot(pt.x - prev.x, pt.y - prev.y);
-      parts.push(Bodies.rectangle(
-        x + (prev.x + pt.x) / 2, y + (prev.y + pt.y) / 2,
-        len + 3, pose.tail.w + 2,
-        { ...MOUSE_OPTS, angle: Math.atan2(pt.y - prev.y, pt.x - prev.x) }));
-      prev = pt;
-    }
-  }
-  const body = Body.create({ parts, ...MOUSE_OPTS });
+  // physics = one clean silhouette polygon: a single flat contact edge at the
+  // bottom, mass and balance derived from the 2D shape itself (uniform density)
+  const outline = OUTLINES[poseKey];
+  const body = Bodies.fromVertices(x, y, [outline.map(([px, py]) => ({ x: px, y: py }))], { ...MOUSE_OPTS }, true);
   body.sleepThreshold = 30; // doze off quickly once still
+  // empirical pose-local -> body calibration (decomp can shift the centroid)
+  let minX = Infinity, maxY = -Infinity;
+  for (const [px, py] of outline) { if (px < minX) minX = px; if (py > maxY) maxY = py; }
   body.plugin.mouse = {
     pose: poseKey, player: playerIdx,
-    off: { x: body.position.x - x, y: body.position.y - y }, // pose-origin -> COM
-    landed: false, launch: 0,
+    off: { x: minX - (body.bounds.min.x - body.position.x), y: maxY - (body.bounds.max.y - body.position.y) },
+    landed: false, launch: 0, grace: 0,
   };
   return body;
 }
@@ -393,16 +367,28 @@ function step(ms) {
     if (launched) mp.launch--;
     let vx = p.velocity.x, vy = p.velocity.y, fix = false;
     // terminal fall speed: shallower penetration on landing = smaller correction pop
-    if (vy > 13) { vy = 13; fix = true; }
+    if (vy > 10) { vy = 10; fix = true; }
     // anti-pop: pieces never gain real upward velocity (restitution is 0), so any
     // solver-invented hop gets clamped flat during play; trap launches and
     // game-over flings stay free
     if (S.screen !== 'over' && !launched && vy < -0.9) { vy = -0.9; fix = true; }
+    // creep killer: once landed, multi-contact solver noise (the vibrate-and-
+    // strafe walk) is squashed every frame so it can never accumulate. Linear
+    // only - rotation is untouched, so a genuine gravity-tip still falls over.
+    const grounded = (!mp || mp.landed) && !launched;
+    if (grounded && Math.abs(vx) < 0.7 && Math.abs(vy) < 0.9) {
+      vx *= 0.45; vy *= 0.6; fix = true;
+    }
+    // landing grace: while the position solver pushes a fresh landing out of
+    // penetration, damp slide and spin hard so the shove can't tip or walk it
+    if (mp && mp.grace > 0) {
+      mp.grace--;
+      vx *= 0.55; fix = true;
+      Body.setAngularVelocity(p, p.angularVelocity * 0.55);
+    }
     if (fix) Body.setVelocity(p, { x: vx, y: vy });
-    // micro-motion damper: bleed off tiny residual velocities so the pile can't
-    // buzz - gentle on spin so a genuine slow gravity-tip still falls over
+    // and a whisper of angular damping for micro-rocking
     if (p.speed < 0.25 && p.angularSpeed < 0.02) {
-      Body.setVelocity(p, { x: p.velocity.x * 0.7, y: p.velocity.y * 0.7 });
       Body.setAngularVelocity(p, p.angularVelocity * 0.85);
     }
   }
@@ -458,6 +444,7 @@ Events.on(engine, 'collisionStart', ev => {
         Body.setAngularVelocity(b, b.angularVelocity * 0.4);
         if (!mp.landed) { mp.landed = true; }
         mp.launch = 0;
+        mp.grace = 25; // brief landing grace: spin/slide damped while the solver pushes out
         sfx('land');
       }
     }

@@ -122,8 +122,11 @@ function resize() {
   W = window.innerWidth; H = window.innerHeight;
   canvas.width = W * dpr; canvas.height = H * dpr;
   canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
-  scale = Math.min(W / WORLD_W, 1.7);
-  baseY = H * 0.76;
+  // adaptive: keep >=250px below the platform for the control zone, and only
+  // zoom as far as the sky above it can fit a full drop (fills iPad width,
+  // fixes cramped landscape, leaves phones exactly as before)
+  baseY = Math.min(H * 0.76, H - 250);
+  scale = Math.min(W / WORLD_W, (baseY - 100) / 360, 2.2);
 }
 window.addEventListener('resize', resize); resize();
 

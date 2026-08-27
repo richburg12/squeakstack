@@ -71,7 +71,7 @@ const world = engine.world;
 
 // restitution 0 + generous slop: mice thud and stay put (no solver jitter-hop)
 // (pair friction = min of the two bodies, so the platform gets high values too)
-const MOUSE_OPTS = { friction:1.0, frictionStatic:1.6, restitution:0, frictionAir:0.012, slop:0.08 };
+const MOUSE_OPTS = { friction:1.0, frictionStatic:1.6, restitution:0, frictionAir:0.015, slop:0.08 };
 const platform = Bodies.rectangle(0, PLAT_H/2, PLAT_W, PLAT_H, { isStatic:true, friction:2, frictionStatic:2, restitution:0, slop:0.08 });
 Composite.add(world, platform);
 
@@ -450,9 +450,11 @@ function step(ms) {
     // not ice) - rocking keeps breaking contacts, and Matter's friction can't
     // act during those airborne micro-frames. Gravity torque overwhelms this
     // within a couple of frames, so a genuine tip still falls over.
-    if (!launched && p.speed < 0.6 && p.angularSpeed < 0.03) {
-      vx *= 0.6; fix = true;
-      Body.setAngularVelocity(p, p.angularVelocity * 0.94);
+    if (!launched && p.speed < 0.8) {
+      // slide dies fast (cloth on cloth) ...
+      if (Math.abs(vx) < 0.8) { vx *= 0.5; fix = true; }
+      // ...spin bleeds gently, so rocking fades but a gravity-tip still falls
+      if (p.angularSpeed < 0.03) Body.setAngularVelocity(p, p.angularVelocity * 0.94);
     }
     if (fix) Body.setVelocity(p, { x: vx, y: vy });
   }
@@ -890,14 +892,13 @@ canvas.addEventListener('pointerdown', e => {
   doRotate();
   e.preventDefault();
 });
-$('dropBtn').addEventListener('pointerdown', e => { unlock(); e.stopPropagation(); });
-$('dropBtn').addEventListener('click', () => { unlock(); doDrop(); });
-$('trapBtn').addEventListener('pointerdown', e => { unlock(); e.stopPropagation(); });
-$('trapBtn').addEventListener('click', () => { unlock(); playTrap(); });
-$('cheeseBtn').addEventListener('pointerdown', e => { unlock(); e.stopPropagation(); });
-$('cheeseBtn').addEventListener('click', () => { unlock(); playDefCheese(); });
-$('catBtn').addEventListener('pointerdown', e => { unlock(); e.stopPropagation(); });
-$('catBtn').addEventListener('click', () => { unlock(); playCat(); });
+// act on pointerdown, not click: synthesized clicks don't fire reliably while
+// another finger is held down (the defender riding the cheese pad), and each
+// concurrent touch gets its own pointer stream - true multi-touch play
+$('dropBtn').addEventListener('pointerdown', e => { unlock(); e.stopPropagation(); doDrop(); });
+$('trapBtn').addEventListener('pointerdown', e => { unlock(); e.stopPropagation(); playTrap(); });
+$('cheeseBtn').addEventListener('pointerdown', e => { unlock(); e.stopPropagation(); playDefCheese(); });
+$('catBtn').addEventListener('pointerdown', e => { unlock(); e.stopPropagation(); playCat(); });
 $('mute').addEventListener('click', e => { muted = !muted; e.target.textContent = muted ? '🔇' : '🔊'; });
 document.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('gesturestart', e => e.preventDefault());
@@ -910,7 +911,10 @@ function padPoint(e) {
   if (flipped) wx = -wx;
   const wy = (syv - baseY) / scale + camY;
   const spawnY = stackTop() - SPAWN_GAP;
-  S.cheeseCtl.x = Math.max(-200, Math.min(200, wx));
+  // the cheese can't be parked past the platform edge - you can scramble the
+  // dropper's aim, but never force a guaranteed off-the-side drop
+  const lim = PLAT_W / 2 - 40;
+  S.cheeseCtl.x = Math.max(-lim, Math.min(lim, wx));
   S.cheeseCtl.yOff = Math.max(-45, Math.min(45, wy - (spawnY - 55)));
 }
 const pad = $('cheesePad');

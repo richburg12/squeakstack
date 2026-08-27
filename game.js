@@ -70,8 +70,9 @@ engine.velocityIterations = 10;
 const world = engine.world;
 
 // restitution 0 + generous slop: mice thud and stay put (no solver jitter-hop)
-const MOUSE_OPTS = { friction:0.9, frictionStatic:1.2, restitution:0, frictionAir:0.012, slop:0.08 };
-const platform = Bodies.rectangle(0, PLAT_H/2, PLAT_W, PLAT_H, { isStatic:true, friction:1, restitution:0, slop:0.08 });
+// (pair friction = min of the two bodies, so the platform gets high values too)
+const MOUSE_OPTS = { friction:1.0, frictionStatic:1.6, restitution:0, frictionAir:0.012, slop:0.08 };
+const platform = Bodies.rectangle(0, PLAT_H/2, PLAT_W, PLAT_H, { isStatic:true, friction:2, frictionStatic:2, restitution:0, slop:0.08 });
 Composite.add(world, platform);
 
 // Soften penetration push-out: Matter corrects overlap by shoving positions,
@@ -273,7 +274,7 @@ function playCat() {
   // band sits just under the drop line - anchored to THIS drop's spawn height,
   // not the live stack top (which would include the falling mouse itself)
   const refY = (S.screen === 'settling' && S.dropRefY != null) ? S.dropRefY : stackTop() - SPAWN_GAP;
-  S.catSwipe = { x: dir > 0 ? -270 : 270, dir, y: refY + 70, hit: false };
+  S.catSwipe = { dir, y: refY + 70, t: 0, x: dir > 0 ? -280 : 280, pawAng: 0, hit: false };
   sfx('meow');
   updateHud();
 }
@@ -393,13 +394,34 @@ function step(ms) {
   }
   Engine.update(engine, ms);
 
-  // cat paw sweep
+  // cat paw: dart in -> wind up -> FLICK -> retreat the way it came
   if (S.catSwipe) {
     const c = S.catSwipe;
-    c.x += c.dir * PAW_SPEED;
+    c.t += ms / 1000;
+    const T_IN = 0.2, T_SWIPE = 0.16, T_OUT = 0.3;
+    const start = c.dir > 0 ? -280 : 280, reach = c.dir * 130;
+    if (c.t < T_IN) {
+      const k = 1 - Math.pow(1 - c.t / T_IN, 3);            // ease-out dart
+      c.x = start + (reach - start) * k;
+      c.pawAng = -0.3 * k;                                   // wind up
+      c.phase = 'in';
+    } else if (c.t < T_IN + T_SWIPE) {
+      const s = (c.t - T_IN) / T_SWIPE;
+      c.x = reach + c.dir * 24 * Math.sin(s * Math.PI);      // lunge
+      c.pawAng = -0.3 + 1.0 * (1 - Math.pow(1 - s, 2));      // the flick
+      c.phase = 'swipe';
+    } else if (c.t < T_IN + T_SWIPE + T_OUT) {
+      const k = Math.pow((c.t - T_IN - T_SWIPE) / T_OUT, 2); // ease-in retreat
+      c.x = reach + (start - reach) * k;
+      c.pawAng = 0.7 * (1 - k);
+      c.phase = 'out';
+    } else {
+      S.catSwipe = null;
+    }
+    const swinging = S.catSwipe && c.t < T_IN + T_SWIPE;     // only the strike can hit
     const t = S.lastDrop;
-    if (!c.hit && t && t.plugin.mouse && !t.plugin.mouse.landed &&
-        Math.abs(t.position.x - c.x) < 50 && t.bounds.min.y < c.y + 36 && t.bounds.max.y > c.y - 36) {
+    if (swinging && !c.hit && t && t.plugin.mouse && !t.plugin.mouse.landed &&
+        Math.abs(t.position.x - c.x) < 52 && t.bounds.min.y < c.y + 38 && t.bounds.max.y > c.y - 38) {
       c.hit = true;
       Body.setVelocity(t, { x: c.dir * 9, y: Math.min(t.velocity.y, 2) });
       Body.setAngularVelocity(t, c.dir * 0.25);
@@ -408,7 +430,6 @@ function step(ms) {
       sfx('swat');
       toast('🐾 SWATTED!!', '#8a5a26');
     }
-    if (c.x > 290 || c.x < -290) S.catSwipe = null;
   }
 
   // post-solve velocity hygiene
@@ -425,6 +446,14 @@ function step(ms) {
     // solver-invented hop gets clamped flat during play; trap launches, cat
     // swats and game-over flings stay free
     if (S.screen !== 'over' && !launched && vy < -0.9) { vy = -0.9; fix = true; }
+    // surface grip: at crawling speeds, slide and rocking bleed off (carpet,
+    // not ice) - rocking keeps breaking contacts, and Matter's friction can't
+    // act during those airborne micro-frames. Gravity torque overwhelms this
+    // within a couple of frames, so a genuine tip still falls over.
+    if (!launched && p.speed < 0.6 && p.angularSpeed < 0.03) {
+      vx *= 0.6; fix = true;
+      Body.setAngularVelocity(p, p.angularVelocity * 0.94);
+    }
     if (fix) Body.setVelocity(p, { x: vx, y: vy });
   }
 
@@ -661,30 +690,47 @@ function drawPaw(c) {
   ctx.save();
   ctx.translate(w2sX(c.x), w2sY(c.y));
   ctx.scale(scale * c.dir, scale);
-  // whoosh lines
-  ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 3; ctx.lineCap = 'round';
-  for (const [lx, ly, ll] of [[-50, -14, 30], [-56, 0, 40], [-50, 14, 30]]) {
-    ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(lx - ll, ly); ctx.stroke();
+  // trailing whoosh while darting in / retreating
+  if (c.phase !== 'swipe') {
+    ctx.strokeStyle = 'rgba(255,255,255,0.7)'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+    for (const [lx, ly, ll] of [[-60, -14, 26], [-66, 0, 36], [-60, 14, 26]]) {
+      ctx.beginPath(); ctx.moveTo(lx, ly); ctx.lineTo(lx - ll, ly); ctx.stroke();
+    }
   }
-  // furry arm
+  // furry arm reaching from off-screen to the wrist
   ctx.fillStyle = '#f6e7cf'; ctx.strokeStyle = '#c9a36b'; ctx.lineWidth = 4; ctx.lineJoin = 'round';
   ctx.beginPath();
-  ctx.moveTo(-300, -16); ctx.lineTo(-4, -17); ctx.quadraticCurveTo(4, 0, -4, 17); ctx.lineTo(-300, 16);
+  ctx.moveTo(-320, -15); ctx.lineTo(-12, -15); ctx.lineTo(-12, 15); ctx.lineTo(-320, 15); ctx.closePath();
   ctx.fill();
-  ctx.beginPath(); ctx.moveTo(-300, -16); ctx.lineTo(-4, -17); ctx.quadraticCurveTo(4, 0, -4, 17); ctx.lineTo(-300, 16); ctx.stroke();
-  // paw
+  ctx.beginPath(); ctx.moveTo(-320, -15); ctx.lineTo(-12, -15); ctx.moveTo(-320, 15); ctx.lineTo(-12, 15); ctx.stroke();
+  // swipe arcs traced by the flick
+  if (c.phase === 'swipe') {
+    ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 3.5; ctx.lineCap = 'round';
+    for (const r of [52, 66]) {
+      ctx.beginPath(); ctx.arc(-12, 0, r, -0.55, c.pawAng + 0.35); ctx.stroke();
+    }
+  }
+  // the paw flicks about the wrist
+  ctx.translate(-12, 0);
+  ctx.rotate(c.pawAng);
   ctx.fillStyle = '#faf1e0';
-  ctx.beginPath(); ctx.ellipse(8, 0, 24, 21, 0, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(22, 0, 24, 21, 0, 0, 7); ctx.fill();
   ctx.strokeStyle = '#c9a36b'; ctx.stroke();
-  // toes
-  for (const [tx, ty] of [[24, -13], [29, 0], [24, 13]]) {
+  for (const [tx, ty] of [[38, -13], [43, 0], [38, 13]]) {
     ctx.fillStyle = '#faf1e0';
     ctx.beginPath(); ctx.ellipse(tx, ty, 7.5, 6.5, 0, 0, 7); ctx.fill(); ctx.stroke();
   }
+  // claws out mid-flick
+  if (c.pawAng > 0.3) {
+    ctx.strokeStyle = '#8f8f96'; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+    for (const [tx, ty, ax, ay] of [[44, -14, 9, -4], [50, 0, 10, 0], [44, 14, 9, 4]]) {
+      ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(tx + ax, ty + ay); ctx.stroke();
+    }
+  }
   // beans
   ctx.fillStyle = '#f0a8b8';
-  ctx.beginPath(); ctx.ellipse(8, 2, 8, 6.5, 0, 0, 7); ctx.fill();
-  for (const [tx, ty] of [[24, -13], [29, 0], [24, 13]]) {
+  ctx.beginPath(); ctx.ellipse(22, 2, 8, 6.5, 0, 0, 7); ctx.fill();
+  for (const [tx, ty] of [[38, -13], [43, 0], [38, 13]]) {
     ctx.beginPath(); ctx.arc(tx, ty, 2.8, 0, 7); ctx.fill();
   }
   ctx.restore();

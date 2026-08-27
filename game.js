@@ -12,7 +12,8 @@ const SPAWN_GAP = 235;             // ghost hovers this far above stack top
 const SWAY_AMP = 192, SWAY_PERIOD = 2.9; // sway reaches past the platform edges
 const START_LIVES = 3;
 const HEART_ABOVE = 105;           // heart floats this far above the stack top
-const TRAP_LAUNCH = 12.5;          // snap launch speed (apex lands near the top of the screen)
+const TRAP_LAUNCH = 23;            // snap launch speed - apex just shy of the top of the screen
+const G_STEP = 0.278;              // gravity per frame^2 in Matter's step units (for the energy guard)
 const PAW_SPEED = 20;              // cat paw sweep, world units per frame
 
 const PLAYERS = [
@@ -450,16 +451,38 @@ function step(ms) {
     // not ice) - rocking keeps breaking contacts, and Matter's friction can't
     // act during those airborne micro-frames. Gravity torque overwhelms this
     // within a couple of frames, so a genuine tip still falls over.
+    const info = (!launched && S.screen !== 'over') ? contactInfo(p) : null;
     // firm-cloth grip, but ONLY for statically stable bodies (COM inside the
     // span of its supporting contacts). Tipping IS lateral motion - the COM
     // swings sideways about the contact - so damping slow vx on an unbalanced
     // body stalls its tip mid-air. Balanced: slide and rocking die fast.
     // Unbalanced: hands off, gravity finishes the job.
-    if (!launched && p.speed < 0.8 && isStaticallyStable(p)) {
+    if (info && info.stable && p.speed < 0.8) {
       if (Math.abs(vx) < 0.8) { vx *= 0.5; fix = true; }
       if (p.angularSpeed < 0.03) Body.setAngularVelocity(p, p.angularVelocity * 0.94);
     }
     if (fix) Body.setVelocity(p, { x: vx, y: vy });
+    // no-free-energy law: while touching only calm things (restitution is 0),
+    // total mechanical energy may never increase frame-over-frame - the solver
+    // can't inject see-saw bounces. Rocking/tipping/rolling SPEND energy, so
+    // they pass untouched; a fast partner is a legitimate source, so chain
+    // reactions stay wild.
+    const k2 = p.inertia / p.mass;
+    const ke = 0.5 * (p.speed * p.speed + k2 * p.angularSpeed * p.angularSpeed);
+    const e = ke + (-G_STEP * p.position.y);
+    if (info && info.touching && info.partnersCalm) {
+      if (p.plugin.prevE != null && e > p.plugin.prevE + 0.5 && ke > 0.001) {
+        const allowedKe = Math.max(0, p.plugin.prevE - (-G_STEP * p.position.y));
+        const s = Math.sqrt(allowedKe / ke);
+        Body.setVelocity(p, { x: p.velocity.x * s, y: p.velocity.y * s });
+        Body.setAngularVelocity(p, p.angularVelocity * s);
+        p.plugin.prevE = allowedKe + (-G_STEP * p.position.y);
+      } else {
+        p.plugin.prevE = Math.min(p.plugin.prevE ?? e, e);
+      }
+    } else {
+      p.plugin.prevE = e; // airborne or energetic contact: accept current energy
+    }
   }
 
   // heart pickup: only a slow (settled or apex-drifting) mouse can grab it
@@ -498,13 +521,17 @@ function step(ms) {
     if ((S.settleFrames >= 45 && !S.catSwipe) || S.settleClock > 12000) nextTurn();
   }
 }
-// COM horizontally inside the span of contact points below it = can rest here
-function isStaticallyStable(body) {
-  let lo = Infinity, hi = -Infinity, found = false;
+// one sweep over the live contact pairs: support span below the COM, plus
+// whether every contact partner is calm (static / asleep / slow)
+function contactInfo(body) {
+  let lo = Infinity, hi = -Infinity, found = false, touching = false, partnersCalm = true;
   for (const pair of engine.pairs.list) {
     if (!pair.isActive) continue;
     const A = pair.collision.parentA, B = pair.collision.parentB;
     if (A !== body && B !== body) continue;
+    touching = true;
+    const other = A === body ? B : A;
+    if (!other.isStatic && !other.isSleeping && other.speed > 1) partnersCalm = false;
     const contacts = pair.activeContacts || pair.contacts || [];
     for (const c of contacts) {
       const v = c.vertex || c;
@@ -515,7 +542,8 @@ function isStaticallyStable(body) {
       }
     }
   }
-  return found && body.position.x >= lo - 1.5 && body.position.x <= hi + 1.5;
+  const stable = found && body.position.x >= lo - 1.5 && body.position.x <= hi + 1.5;
+  return { touching, partnersCalm, stable };
 }
 
 Events.on(engine, 'collisionStart', ev => {

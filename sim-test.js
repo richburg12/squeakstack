@@ -60,7 +60,7 @@ for (const key of Object.keys(OUTLINES)) {
           if (!mp.landed) {
             Body.setVelocity(b, { x: b.velocity.x * 0.35, y: Math.max(0, b.velocity.y) * 0.25 });
             Body.setAngularVelocity(b, b.angularVelocity * 0.4);
-            mp.landed = true; mp.grace = 25;
+            mp.landed = true;
           }
         }
       }
@@ -73,10 +73,7 @@ for (const key of Object.keys(OUTLINES)) {
         let vx = m.velocity.x, vy = m.velocity.y, fix = false;
         if (vy > 10) { vy = 10; fix = true; }
         if (vy < -0.9) { vy = -0.9; fix = true; }
-        if (m.plugin.mouse.landed && Math.abs(vx) < 0.7 && Math.abs(vy) < 0.9) { vx *= 0.45; vy *= 0.6; fix = true; }
-        if (m.plugin.mouse.grace > 0) { m.plugin.mouse.grace--; vx *= 0.55; fix = true; Body.setAngularVelocity(m, m.angularVelocity * 0.55); }
         if (fix) Body.setVelocity(m, { x: vx, y: vy });
-        if (m.speed < 0.25 && m.angularSpeed < 0.02) Body.setAngularVelocity(m, m.angularVelocity * 0.85);
       }
       if (touchedAt < 0 && m.plugin.mouse.landed) { touchedAt = f; xAtTouch = m.position.x; }
       if (m.isSleeping) { sleptAt = f; break; }

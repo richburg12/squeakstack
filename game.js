@@ -38,21 +38,17 @@ const POSES = {
     tail:{pts:[[20,-12],[34,-30],[12,-46]], w:5} },
   loaf: { label:'Loafie', w:3,
     parts:[ ['e',0,-17,30,15,0], ['e',22,-24,13,11,0], ['c',16,-37,5.5,'ear'], ['c',27,-35,5,'ear'], ['r',0,-5,54,10,0] ],
-    face:[22,-24,12,-0.05], belly:[-2,-11,18,7],
-    tail:{pts:[[-28,-10],[-42,-20],[-34,-34]], w:5} },
+    face:[22,-24,12,-0.05], belly:[-2,-11,18,7] },
   stretch: { label:'Longboy', w:2,
     parts:[ ['e',2,-12,40,11,0], ['c',38,-16,10], ['c',33,-27,4.5,'ear'], ['c',43,-25,4.5,'ear'] ],
-    face:[38,-16,10,-0.1],
-    tail:{pts:[[-38,-10],[-52,-13],[-61,-6]], w:5} },
+    face:[38,-16,10,-0.1] },
   hook: { label:'Hooky', w:1.5,
     parts:[ ['e',6,-24,17,22,0], ['c',16,-49,11], ['c',10,-60,5,'ear'], ['c',22,-58,5,'ear'], ['r',6,-4,30,8,0] ],
-    face:[16,-49,11,-0.3], belly:[7,-18,10,13], feet:[[-1,-2],[13,-2]],
-    tail:{pts:[[-11,-26],[-15,-58],[-28,-42]], w:6} },
+    face:[16,-49,11,-0.3], belly:[7,-18,10,13], feet:[[-1,-2],[13,-2]] },
   chonk: { label:'Chonk', w:2,
     parts:[ ['e',-2,-30,33,23,0], ['c',28,-42,15], ['c',22,-59,7,'ear'], ['c',35,-56,6.5,'ear'],
             ['r',-18,-6,12,12,0], ['r',14,-6,12,12,0] ],
-    face:[28,-42,15,-0.15], belly:[-4,-22,20,12], feet:[[-18,-4],[14,-4]],
-    tail:{pts:[[-33,-32],[-48,-40],[-46,-51]], w:6} },
+    face:[28,-42,15,-0.15], belly:[-4,-22,20,12], feet:[[-18,-4],[14,-4]] },
   arch: { label:'Bridget', w:1.5,
     parts:[ ['r',-26,-13,12,26,0], ['r',26,-13,12,26,0], ['e',0,-32,32,13,0], ['c',33,-24,10],
             ['c',30,-33,4.5,'ear'], ['c',38,-31,4.5,'ear'] ],
@@ -93,7 +89,7 @@ function buildMouse(poseKey, x, y, playerIdx) {
   body.plugin.mouse = {
     pose: poseKey, player: playerIdx,
     off: { x: minX - (body.bounds.min.x - body.position.x), y: maxY - (body.bounds.max.y - body.position.y) },
-    landed: false, launch: 0, grace: 0,
+    landed: false, launch: 0,
   };
   return body;
 }
@@ -372,25 +368,7 @@ function step(ms) {
     // solver-invented hop gets clamped flat during play; trap launches and
     // game-over flings stay free
     if (S.screen !== 'over' && !launched && vy < -0.9) { vy = -0.9; fix = true; }
-    // creep killer: once landed, multi-contact solver noise (the vibrate-and-
-    // strafe walk) is squashed every frame so it can never accumulate. Linear
-    // only - rotation is untouched, so a genuine gravity-tip still falls over.
-    const grounded = (!mp || mp.landed) && !launched;
-    if (grounded && Math.abs(vx) < 0.7 && Math.abs(vy) < 0.9) {
-      vx *= 0.45; vy *= 0.6; fix = true;
-    }
-    // landing grace: while the position solver pushes a fresh landing out of
-    // penetration, damp slide and spin hard so the shove can't tip or walk it
-    if (mp && mp.grace > 0) {
-      mp.grace--;
-      vx *= 0.55; fix = true;
-      Body.setAngularVelocity(p, p.angularVelocity * 0.55);
-    }
     if (fix) Body.setVelocity(p, { x: vx, y: vy });
-    // and a whisper of angular damping for micro-rocking
-    if (p.speed < 0.25 && p.angularSpeed < 0.02) {
-      Body.setAngularVelocity(p, p.angularVelocity * 0.85);
-    }
   }
 
   // heart pickup: only a slow (settled or apex-drifting) mouse can grab it -
@@ -439,12 +417,13 @@ Events.on(engine, 'collisionStart', ev => {
       // impact absorption: on its first touch (or on re-landing after a trap
       // launch) a mouse dumps most of its momentum - beanbag thud, not a
       // bouncing block. An upright landing stays upright instead of twisting over.
+      // instantaneous inelastic impact (plush thud) - one frame, then physics
+      // runs honest: gravity tips, slides, and topples act immediately
       if (!mp.landed || (mp.launch > 0 && mp.launch < 100)) {
         Body.setVelocity(b, { x: b.velocity.x * 0.35, y: Math.max(0, b.velocity.y) * 0.25 });
         Body.setAngularVelocity(b, b.angularVelocity * 0.4);
         if (!mp.landed) { mp.landed = true; }
         mp.launch = 0;
-        mp.grace = 25; // brief landing grace: spin/slide damped while the solver pushes out
         sfx('land');
       }
     }
@@ -645,14 +624,15 @@ function drawAnims() {
     ctx.restore();
   }
 }
-function partPath(p) {
-  if (p[0] === 'c') { ctx.beginPath(); ctx.arc(p[1], p[2], p[3], 0, 7); }
-  else if (p[0] === 'e') { ctx.beginPath(); ctx.ellipse(p[1], p[2], p[3], p[4], p[5] || 0, 0, 7); }
-  else {
-    ctx.save(); ctx.translate(p[1], p[2]); ctx.rotate(p[5] || 0);
-    ctx.beginPath(); ctx.rect(-p[3] / 2, -p[4] / 2, p[3], p[4]);
-    ctx.restore();
+function smoothOutlinePath(pts) {
+  const n = pts.length;
+  ctx.beginPath();
+  ctx.moveTo((pts[0][0] + pts[1][0]) / 2, (pts[0][1] + pts[1][1]) / 2);
+  for (let i = 1; i <= n; i++) {
+    const p = pts[i % n], q = pts[(i + 1) % n];
+    ctx.quadraticCurveTo(p[0], p[1], (p[0] + q[0]) / 2, (p[1] + q[1]) / 2);
   }
+  ctx.closePath();
 }
 function drawMouse(m, alpha) {
   const mp = m.plugin.mouse, pose = POSES[mp.pose], pl = PLAYERS[mp.player];
@@ -663,18 +643,21 @@ function drawMouse(m, alpha) {
   ctx.rotate(m.angle);
   ctx.translate(-mp.off.x, -mp.off.y);
 
-  // tail first, tucked behind the body
+  // stroke tail behind the body - only for poses whose tail is NOT part of
+  // the physics outline (short tails hugging the silhouette)
   if (pose.tail) {
     const t = pose.tail.pts;
     ctx.strokeStyle = pl.dark; ctx.lineWidth = pose.tail.w; ctx.lineCap = 'round';
     ctx.beginPath(); ctx.moveTo(t[0][0], t[0][1]); ctx.quadraticCurveTo(t[1][0], t[1][1], t[2][0], t[2][1]); ctx.stroke();
   }
 
-  // outline pass then fill pass (expanded-stroke union trick)
+  // silhouette = the physics outline itself (smoothed): what you see is
+  // exactly what collides - no invisible contact surfaces, ever
+  const outline = OUTLINES[mp.pose];
   ctx.strokeStyle = pl.dark; ctx.lineWidth = 5; ctx.lineJoin = 'round';
-  for (const p of pose.parts) { partPath(p); ctx.stroke(); }
+  smoothOutlinePath(outline); ctx.stroke();
   ctx.fillStyle = pl.body;
-  for (const p of pose.parts) { partPath(p); ctx.fill(); }
+  smoothOutlinePath(outline); ctx.fill();
 
   // belly
   if (pose.belly) {

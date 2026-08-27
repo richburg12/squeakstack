@@ -450,10 +450,13 @@ function step(ms) {
     // not ice) - rocking keeps breaking contacts, and Matter's friction can't
     // act during those airborne micro-frames. Gravity torque overwhelms this
     // within a couple of frames, so a genuine tip still falls over.
-    if (!launched && p.speed < 0.8) {
-      // slide dies fast (cloth on cloth) ...
+    // firm-cloth grip, but ONLY for statically stable bodies (COM inside the
+    // span of its supporting contacts). Tipping IS lateral motion - the COM
+    // swings sideways about the contact - so damping slow vx on an unbalanced
+    // body stalls its tip mid-air. Balanced: slide and rocking die fast.
+    // Unbalanced: hands off, gravity finishes the job.
+    if (!launched && p.speed < 0.8 && isStaticallyStable(p)) {
       if (Math.abs(vx) < 0.8) { vx *= 0.5; fix = true; }
-      // ...spin bleeds gently, so rocking fades but a gravity-tip still falls
       if (p.angularSpeed < 0.03) Body.setAngularVelocity(p, p.angularVelocity * 0.94);
     }
     if (fix) Body.setVelocity(p, { x: vx, y: vy });
@@ -495,6 +498,26 @@ function step(ms) {
     if ((S.settleFrames >= 45 && !S.catSwipe) || S.settleClock > 12000) nextTurn();
   }
 }
+// COM horizontally inside the span of contact points below it = can rest here
+function isStaticallyStable(body) {
+  let lo = Infinity, hi = -Infinity, found = false;
+  for (const pair of engine.pairs.list) {
+    if (!pair.isActive) continue;
+    const A = pair.collision.parentA, B = pair.collision.parentB;
+    if (A !== body && B !== body) continue;
+    const contacts = pair.activeContacts || pair.contacts || [];
+    for (const c of contacts) {
+      const v = c.vertex || c;
+      if (v && typeof v.x === 'number' && v.y > body.position.y + 2) {
+        found = true;
+        if (v.x < lo) lo = v.x;
+        if (v.x > hi) hi = v.x;
+      }
+    }
+  }
+  return found && body.position.x >= lo - 1.5 && body.position.x <= hi + 1.5;
+}
+
 Events.on(engine, 'collisionStart', ev => {
   for (const pair of ev.pairs) {
     const A = pair.bodyA.parent, B = pair.bodyB.parent;

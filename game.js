@@ -27,7 +27,7 @@ const POSES = {
     face:[15,-33,12,-0.15], belly:[2,-13,13,8],
     tail:{pts:[[-18,-5],[4,4],[27,-7]], w:5} },
   stand: { label:'Tippy', w:2,
-    parts:[ ['e',0,-36,15,26,0], ['c',3,-70,12], ['c',-3,-83,6,'ear'], ['c',9,-81,5.5,'ear'], ['r',0,-6,26,12,0], ['r',-12,-10,24,7,0.5] ],
+    parts:[ ['e',0,-36,15,26,0], ['c',3,-70,12], ['c',-3,-83,6,'ear'], ['c',9,-81,5.5,'ear'], ['r',0,-6,26,12,0] ],
     face:[3,-70,12,-0.35], belly:[1,-30,9,16], feet:[[-7,-3],[7,-3]],
     tail:{pts:[[-2,-8],[-24,-2],[-30,-14]], w:5} },
   ball: { label:'Bobble', w:1.5,
@@ -39,17 +39,16 @@ const POSES = {
     face:[22,-24,12,-0.05], belly:[-2,-11,18,7],
     tail:{pts:[[-28,-10],[-42,-20],[-34,-34]], w:5} },
   stretch: { label:'Longboy', w:2,
-    parts:[ ['e',2,-12,40,11,0], ['c',38,-16,10], ['c',33,-27,4.5,'ear'], ['c',43,-25,4.5,'ear'], ['r',-46,-9,26,6,-0.15] ],
+    parts:[ ['e',2,-12,40,11,0], ['c',38,-16,10], ['c',33,-27,4.5,'ear'], ['c',43,-25,4.5,'ear'] ],
     face:[38,-16,10,-0.1],
     tail:{pts:[[-38,-10],[-52,-13],[-61,-6]], w:5} },
   hook: { label:'Hooky', w:1.5,
-    parts:[ ['e',6,-24,17,22,0], ['c',16,-49,11], ['c',10,-60,5,'ear'], ['c',22,-58,5,'ear'], ['r',6,-4,30,8,0],
-            ['r',-10,-34,7,34,0], ['r',-18,-53,18,7,0], ['r',-25,-45,7,17,0] ],
+    parts:[ ['e',6,-24,17,22,0], ['c',16,-49,11], ['c',10,-60,5,'ear'], ['c',22,-58,5,'ear'], ['r',6,-4,30,8,0] ],
     face:[16,-49,11,-0.3], belly:[7,-18,10,13], feet:[[-1,-2],[13,-2]],
     tail:{pts:[[-10,-20],[-11,-53],[-25,-44]], w:6} },
   chonk: { label:'Chonk', w:2,
     parts:[ ['e',-2,-30,33,23,0], ['c',28,-42,15], ['c',22,-59,7,'ear'], ['c',35,-56,6.5,'ear'],
-            ['r',-18,-6,12,12,0], ['r',14,-6,12,12,0], ['r',-38,-38,20,7,-0.45] ],
+            ['r',-18,-6,12,12,0], ['r',14,-6,12,12,0] ],
     face:[28,-42,15,-0.15], belly:[-4,-22,20,12], feet:[[-18,-4],[14,-4]],
     tail:{pts:[[-33,-32],[-48,-40],[-46,-51]], w:6} },
   arch: { label:'Bridget', w:1.5,
@@ -84,7 +83,11 @@ function buildMouse(poseKey, x, y, playerIdx) {
   const pose = POSES[poseKey];
   const parts = pose.parts.map(p => {
     if (p[0] === 'c') return Bodies.circle(x + p[1], y + p[2], p[3], { ...MOUSE_OPTS });
-    if (p[0] === 'r') return Bodies.rectangle(x + p[1], y + p[2], p[3], p[4], { ...MOUSE_OPTS, angle: p[5] || 0 });
+    if (p[0] === 'r') {
+      // rounded corners: no invisible sharp corner to perch on
+      const ch = Math.min(p[3], p[4]) >= 8 ? { chamfer: { radius: 3 } } : {};
+      return Bodies.rectangle(x + p[1], y + p[2], p[3], p[4], { ...MOUSE_OPTS, ...ch, angle: p[5] || 0 });
+    }
     // ellipse: scaled circle
     const r = Math.max(p[3], p[4]);
     const b = Bodies.circle(x + p[1], y + p[2], r, { ...MOUSE_OPTS });
@@ -92,6 +95,25 @@ function buildMouse(poseKey, x, y, playerIdx) {
     if (p[5]) Body.rotate(b, p[5]);
     return b;
   });
+  // solid tail: physics segments sampled from the same curve the art draws,
+  // so tails rest on ledges, catch, and hang instead of passing through things
+  if (pose.tail) {
+    const [p0, cp, p2] = pose.tail.pts;
+    const q = t => ({
+      x: (1 - t) * (1 - t) * p0[0] + 2 * (1 - t) * t * cp[0] + t * t * p2[0],
+      y: (1 - t) * (1 - t) * p0[1] + 2 * (1 - t) * t * cp[1] + t * t * p2[1],
+    });
+    let prev = q(0);
+    for (let i = 1; i <= 3; i++) {
+      const pt = q(i / 3);
+      const len = Math.hypot(pt.x - prev.x, pt.y - prev.y);
+      parts.push(Bodies.rectangle(
+        x + (prev.x + pt.x) / 2, y + (prev.y + pt.y) / 2,
+        len + 3, pose.tail.w + 2,
+        { ...MOUSE_OPTS, angle: Math.atan2(pt.y - prev.y, pt.x - prev.x) }));
+      prev = pt;
+    }
+  }
   const body = Body.create({ parts, ...MOUSE_OPTS });
   body.sleepThreshold = 30; // doze off quickly once still
   body.plugin.mouse = {
@@ -377,10 +399,11 @@ function step(ms) {
     // game-over flings stay free
     if (S.screen !== 'over' && !launched && vy < -0.9) { vy = -0.9; fix = true; }
     if (fix) Body.setVelocity(p, { x: vx, y: vy });
-    // micro-motion damper: bleed off tiny residual velocities so the pile can't buzz
-    if (p.speed < 0.25 && p.angularSpeed < 0.035) {
+    // micro-motion damper: bleed off tiny residual velocities so the pile can't
+    // buzz - gentle on spin so a genuine slow gravity-tip still falls over
+    if (p.speed < 0.25 && p.angularSpeed < 0.02) {
       Body.setVelocity(p, { x: p.velocity.x * 0.7, y: p.velocity.y * 0.7 });
-      Body.setAngularVelocity(p, p.angularVelocity * 0.7);
+      Body.setAngularVelocity(p, p.angularVelocity * 0.85);
     }
   }
 
@@ -443,7 +466,9 @@ Events.on(engine, 'collisionStart', ev => {
                : (B.plugin && B.plugin.trap && B.plugin.trap.armed && !B.plugin.trap.spent) ? B : null;
     if (trap) {
       const other = trap === A ? B : A;
-      if (other.plugin && other.plugin.mouse) snapTrap(trap, other);
+      // speed gate: only a genuine hit fires the trap. Waking the pile re-fires
+      // contact events for pieces already resting against it - those don't count.
+      if (other.plugin && other.plugin.mouse && other.speed > 1.0) snapTrap(trap, other);
     }
   }
 });
@@ -651,6 +676,13 @@ function drawMouse(m, alpha) {
   ctx.rotate(m.angle);
   ctx.translate(-mp.off.x, -mp.off.y);
 
+  // tail first, tucked behind the body
+  if (pose.tail) {
+    const t = pose.tail.pts;
+    ctx.strokeStyle = pl.dark; ctx.lineWidth = pose.tail.w; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(t[0][0], t[0][1]); ctx.quadraticCurveTo(t[1][0], t[1][1], t[2][0], t[2][1]); ctx.stroke();
+  }
+
   // outline pass then fill pass (expanded-stroke union trick)
   ctx.strokeStyle = pl.dark; ctx.lineWidth = 5; ctx.lineJoin = 'round';
   for (const p of pose.parts) { partPath(p); ctx.stroke(); }
@@ -669,12 +701,6 @@ function drawMouse(m, alpha) {
   if (pose.feet) {
     ctx.fillStyle = pl.dark;
     for (const [fx, fy] of pose.feet) { ctx.beginPath(); ctx.ellipse(fx, fy, 6, 3.4, 0, 0, 7); ctx.fill(); }
-  }
-  // tail
-  if (pose.tail) {
-    const t = pose.tail.pts;
-    ctx.strokeStyle = pl.dark; ctx.lineWidth = pose.tail.w; ctx.lineCap = 'round';
-    ctx.beginPath(); ctx.moveTo(t[0][0], t[0][1]); ctx.quadraticCurveTo(t[1][0], t[1][1], t[2][0], t[2][1]); ctx.stroke();
   }
   // face
   if (pose.face) {

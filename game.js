@@ -1109,14 +1109,14 @@ $('startBtn').addEventListener('click', () => {
   unlock();
   S.names[0] = $('n0').value.trim() || 'Player 1';
   S.names[1] = AI_ON ? AI_NAME : ($('n1').value.trim() || 'Player 2');
-  S.tableMode = AI_ON ? false : $('tableChk').checked; // no screen flips against a bot
+  S.tableMode = AI_ON ? true : $('tableChk').checked; // solo test mirrors the real table: screen flips on the bot's turn, and the cat paw lands at the defender's edge like it does in 2P
   save();
   S.cur = Math.random() < 0.5 ? 0 : 1;
   startGame();
 });
 $('againBtn').addEventListener('click', () => { S.cur = S.loser >= 0 ? S.loser : 0; startGame(); });
 
-// solo test mode boot: one name field, no table flip, a small VS AI tag
+// solo test mode boot: one name field, table flip forced ON (real 2P feel), a small VS AI tag
 if (AI_ON) {
   $('n1').parentElement.classList.add('hidden');
   $('tableRow').classList.add('hidden');

@@ -16,6 +16,19 @@ const TRAP_LAUNCH = 23;            // snap launch speed - apex just shy of the t
 const G_STEP = 0.278;              // gravity per frame^2 in Matter's step units (for the energy guard)
 const PAW_SPEED = 20;              // cat paw sweep, world units per frame
 
+// ---------- solo test mode (?ai=1): a bot plays the far side ----------
+const AI_ON = new URLSearchParams(location.search).get('ai') === '1';
+const AI_IDX = 1;                                    // the bot is Player 2 (blue)
+const AI_NAME = 'SqueakBot';
+const AI_THINK_MIN = 500, AI_THINK_MAX = 1300;       // ms of "thinking" before it starts hunting
+const AI_REACT_MIN = 40, AI_REACT_MAX = 140;         // reflex delay once the sway crosses its aim (ms)
+const AI_AIM_BASE = 6, AI_AIM_PER_PIECE = 5;         // aim error (world units), grows with stack height
+const AI_BLUNDER_CHANCE = 0.13, AI_BLUNDER_OFF = 70; // sometimes it just botches one
+const AI_SPIN_CHANCE = 0.4;                          // chance it spins its mouse first (1-3 taps)
+const AI_TRAP_CHANCE = 0.22;                         // per own turn, once 2+ mice are down
+const AI_CHEESE_CHANCE = 0.18;                       // per human turn: flies the cheese
+const AI_CAT_CHANCE = 0.25;                          // per human drop: reflex cat swipe
+
 const PLAYERS = [
   { color:'#ff6a3d', body:'#ffa184', dark:'#c9522c', belly:'#ffdccf' },
   { color:'#2f7bff', body:'#8db8ff', dark:'#3a67c9', belly:'#dce9ff' },
@@ -148,7 +161,7 @@ try {
 } catch {}
 
 const $ = id => document.getElementById(id);
-function save() { localStorage.setItem('squeak', JSON.stringify({ names:S.names, wins:S.wins, table:S.tableMode })); }
+function save() { if (AI_ON) return; localStorage.setItem('squeak', JSON.stringify({ names:S.names, wins:S.wins, table:S.tableMode })); }
 function stackTop() {
   let t = 0;
   for (const p of pieces()) if (p !== S.ghost) t = Math.min(t, p.bounds.min.y);
@@ -215,6 +228,14 @@ function updateHud() {
     b.textContent = '💥 SQUEAK!!'; b.style.color = '#ff4f5e';
     h.innerHTML = '&nbsp;'; d.disabled = true; d.textContent = '…';
   } else { d.disabled = true; d.textContent = '…'; }
+  if (AI_ON) {
+    if (S.cur === AI_IDX) {
+      $('trapBtn').disabled = true;
+      if (S.screen === 'aiming') { d.disabled = true; d.textContent = '🤖…'; h.textContent = `${AI_NAME} is lining one up…`; }
+    } else {
+      $('cheeseBtn').disabled = true; $('catBtn').disabled = true;
+    }
+  }
 }
 function toast(msg, color) {
   const b = $('banner');
@@ -356,6 +377,82 @@ function gameOver() {
 }
 function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
+// ---------- AI (only ever runs with ?ai=1; acts through the human pathways) ----------
+const ai = { ghost:null, defGhost:null, t:0, think:0, spinsLeft:0, spinAt:0, targetX:0, react:-1, cheese:null, catRoll:false };
+function aiPlanTurn() {
+  ai.ghost = S.ghost;
+  ai.t = 0; ai.react = -1;
+  ai.think = AI_THINK_MIN + Math.random() * (AI_THINK_MAX - AI_THINK_MIN);
+  ai.spinAt = ai.think;
+  // aim near the pile's centre of mass (empty platform = dead centre), with an
+  // error that grows as the stack rises - the bot gets shaky at altitude too
+  const settled = mice().filter(m => m !== S.ghost);
+  let com = 0, mass = 0;
+  for (const m of settled) { com += m.position.x * m.mass; mass += m.mass; }
+  com = mass > 0 ? com / mass : 0;
+  let off = (Math.random() * 2 - 1) * (AI_AIM_BASE + AI_AIM_PER_PIECE * settled.length);
+  if (Math.random() < AI_BLUNDER_CHANCE) off += (Math.random() < 0.5 ? -1 : 1) * AI_BLUNDER_OFF;
+  const lim = PLAT_W / 2 - 30;
+  ai.targetX = Math.max(-lim, Math.min(lim, com + off));
+  ai.spinsLeft = Math.random() < AI_SPIN_CHANCE ? 1 + Math.floor(Math.random() * 3) : 0;
+  // sometimes it baits a trap instead of stacking a mouse
+  if (S.traps[AI_IDX] > 0 && settled.length >= 2 && Math.random() < AI_TRAP_CHANCE) {
+    playTrap();
+    ai.ghost = S.ghost; ai.spinsLeft = 0;
+  }
+}
+function aiStep(ms) {
+  // --- its own turn: think, maybe spin, then time the drop like a human would ---
+  if (S.screen === 'aiming' && S.cur === AI_IDX && S.ghost) {
+    if (ai.ghost !== S.ghost) aiPlanTurn();
+    ai.t += ms;
+    if (ai.t < ai.think) return;
+    if (ai.spinsLeft > 0 && !S.ghostTrap) {
+      if (ai.t >= ai.spinAt) { doRotate(); ai.spinsLeft--; ai.spinAt = ai.t + 160 + Math.random() * 240; }
+      return;
+    }
+    if (S.cheeseActive) {
+      // the human is flying the cheese - hold a beat, then dump it and hope
+      if (ai.react < 0) ai.react = ai.t + 700 + Math.random() * 1300;
+    } else if (ai.react < 0 && Math.abs(S.ghost.position.x - ai.targetX) < 10) {
+      // sway just crossed the aim point: arm the reflex (the jitter is the skill gap)
+      ai.react = ai.t + AI_REACT_MIN + Math.random() * (AI_REACT_MAX - AI_REACT_MIN);
+    }
+    if (ai.react >= 0 && ai.t >= ai.react) doDrop();
+    return;
+  }
+  if (S.cur === AI_IDX) return; // its drop is settling - nothing to defend
+  // --- defending the human's turn: same items, same buttons, same odds of whiffing ---
+  if (S.screen === 'aiming' && S.ghost) {
+    if (ai.defGhost !== S.ghost) {
+      ai.defGhost = S.ghost;
+      ai.catRoll = Math.random() < AI_CAT_CHANCE;
+      ai.cheese = (S.cheese[AI_IDX] > 0 && !S.cheeseActive && Math.random() < AI_CHEESE_CHANCE)
+        ? { at: 600 + Math.random() * 1200, t: 0, wt: Math.random() * 10 } : null;
+    }
+    if (ai.cheese) {
+      ai.cheese.t += ms;
+      if (ai.cheese.at >= 0 && ai.cheese.t >= ai.cheese.at) { playDefCheese(); ai.cheese.at = -1; }
+      if (ai.cheese.at < 0 && S.cheeseActive) {
+        // pilot the cheese pad: a lazy weave, through the same control the finger uses
+        ai.cheese.wt += ms / 1000;
+        const lim = PLAT_W / 2 - 40;
+        S.cheeseCtl.touching = true;
+        S.cheeseCtl.x = Math.sin(ai.cheese.wt * 1.1) * lim * 0.8;
+        S.cheeseCtl.yOff = Math.sin(ai.cheese.wt * 1.9) * 32;
+      }
+    }
+  } else if (S.screen === 'settling' && ai.catRoll && S.cats[AI_IDX] > 0 && !S.catSwipe) {
+    // reflex swipe while the human's mouse is still falling toward the paw band
+    const t = S.lastDrop;
+    if (t && t.plugin.mouse && !t.plugin.mouse.landed && S.dropRefY != null &&
+        t.position.y > S.dropRefY - 60) {
+      ai.catRoll = false;
+      playCat();
+    }
+  }
+}
+
 // ---------- simulation ----------
 let last = performance.now(), acc = 0;
 function tick(now) {
@@ -396,6 +493,7 @@ function step(ms) {
     Body.setPosition(S.ghost, { x: gx, y: gy });
     Body.setAngle(S.ghost, S.ghostTrap ? 0 : S.disp);
   }
+  if (AI_ON) aiStep(ms);
   Engine.update(engine, ms);
 
   // cat paw: dart in -> wind up -> FLICK -> retreat the way it came
@@ -943,16 +1041,19 @@ canvas.addEventListener('pointerdown', e => {
   const flipped = $('stage').classList.contains('flip');
   const localY = flipped ? H - e.clientY : e.clientY;
   if (localY < H * 0.3) return;
+  if (AI_ON && S.cur === AI_IDX) return; // the bot's mouse is not yours to spin
   doRotate();
   e.preventDefault();
 });
 // act on pointerdown, not click: synthesized clicks don't fire reliably while
 // another finger is held down (the defender riding the cheese pad), and each
 // concurrent touch gets its own pointer stream - true multi-touch play
-$('dropBtn').addEventListener('pointerdown', e => { unlock(); e.stopPropagation(); doDrop(); });
-$('trapBtn').addEventListener('pointerdown', e => { unlock(); e.stopPropagation(); playTrap(); });
-$('cheeseBtn').addEventListener('pointerdown', e => { unlock(); e.stopPropagation(); playDefCheese(); });
-$('catBtn').addEventListener('pointerdown', e => { unlock(); e.stopPropagation(); playCat(); });
+// in AI mode: drop/trap belong to the human's turn, cheese/cat to the human's
+// defence - the bot's turn and the bot's items are off-limits to stray taps
+$('dropBtn').addEventListener('pointerdown', e => { unlock(); e.stopPropagation(); if (AI_ON && S.cur === AI_IDX) return; doDrop(); });
+$('trapBtn').addEventListener('pointerdown', e => { unlock(); e.stopPropagation(); if (AI_ON && S.cur === AI_IDX) return; playTrap(); });
+$('cheeseBtn').addEventListener('pointerdown', e => { unlock(); e.stopPropagation(); if (AI_ON && S.cur !== AI_IDX) return; playDefCheese(); });
+$('catBtn').addEventListener('pointerdown', e => { unlock(); e.stopPropagation(); if (AI_ON && S.cur !== AI_IDX) return; playCat(); });
 $('mute').addEventListener('click', e => { muted = !muted; e.target.textContent = muted ? '🔇' : '🔊'; });
 document.addEventListener('contextmenu', e => e.preventDefault());
 document.addEventListener('gesturestart', e => e.preventDefault());
@@ -994,13 +1095,25 @@ $('tableChk').checked = S.tableMode;
 $('startBtn').addEventListener('click', () => {
   unlock();
   S.names[0] = $('n0').value.trim() || 'Player 1';
-  S.names[1] = $('n1').value.trim() || 'Player 2';
-  S.tableMode = $('tableChk').checked;
+  S.names[1] = AI_ON ? AI_NAME : ($('n1').value.trim() || 'Player 2');
+  S.tableMode = AI_ON ? false : $('tableChk').checked; // no screen flips against a bot
   save();
   S.cur = Math.random() < 0.5 ? 0 : 1;
   startGame();
 });
 $('againBtn').addEventListener('click', () => { S.cur = S.loser >= 0 ? S.loser : 0; startGame(); });
+
+// solo test mode boot: one name field, no table flip, a small VS AI tag
+if (AI_ON) {
+  $('n1').parentElement.classList.add('hidden');
+  $('tableRow').classList.add('hidden');
+  const tag = document.createElement('div');
+  tag.textContent = 'VS AI';
+  tag.style.cssText = 'position:absolute;top:calc(env(safe-area-inset-top,0px) + 8px);left:10px;z-index:5;' +
+    "font-family:'Fredoka',sans-serif;font-weight:600;font-size:12px;letter-spacing:1px;color:#fff;" +
+    'background:#2f7bff;padding:4px 11px;border-radius:999px;opacity:.85;pointer-events:none;';
+  document.body.appendChild(tag);
+}
 
 // decorative mice behind the start screen
 Composite.add(world, [buildMouse('loaf', -55, -70, 0), buildMouse('tidy', 45, -90, 1)]);
@@ -1010,7 +1123,7 @@ requestAnimationFrame(tick);
 
 // test hooks
 window.__g = {
-  S, mice, pieces, drop: doDrop, rotate: doRotate, playTrap, cheese: playDefCheese, cat: playCat,
+  S, ai, mice, pieces, drop: doDrop, rotate: doRotate, playTrap, cheese: playDefCheese, cat: playCat,
   start(a, b) { S.names = [a || 'A', b || 'B']; S.cur = 0; startGame(); },
   freezeX(x) { S.swayFrozen = x; },
   pose(k) { S.forcedPose = k; },

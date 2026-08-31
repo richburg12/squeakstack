@@ -1088,18 +1088,17 @@ $('cheeseBtn').innerHTML = SVG.cheese;
 $('trapBtn').innerHTML = SVG.trap;
 $('catBtn').innerHTML = SVG.cat;
 
-// start-screen explainer: one rules block, rendered twice (the top copy is
-// rotated 180° in CSS so the far player reads it from their own table edge)
+// start-screen explainer: ONE upright, full-screen rules card — both players
+// hold the phone normally and read it together, then lay the phone flat to play
 const RULES_HTML =
-  '<div class="ruleGoal">Take turns stacking mice — every mouse that falls costs the <b>last dropper</b> a ♥. Lose all 3 = SQUEAK!</div>' +
-  '<div class="ruleCtl">your mouse <b>sways</b> side to side · <b>tap</b> your half = spin 45° · hit <b>DROP</b> when the dashed line is green</div>' +
-  '<div class="ruleRow"><span class="rIcon">' + SVG.trap + '</span><span><b>TRAP</b> · your turn — drop bait instead of a mouse: the next mouse to touch it gets LAUNCHED!</span></div>' +
-  '<div class="ruleRow"><span class="rIcon">' + SVG.cheese + '</span><span><b>CHEESE</b> · their turn — fly it with your finger; their swaying mouse chases it!</span></div>' +
-  '<div class="ruleRow"><span class="rIcon">' + SVG.cat + '</span><span><b>CAT PAW</b> · their turn — one tap: a paw darts in and SWATS their mouse mid-fall!</span></div>' +
-  '<div class="ruleRow"><span class="rIcon rEmoji">❤️</span><span><b>HEART</b> · floats up after a spill — touch it with a mouse to win the life back</span></div>' +
+  '<div class="ruleGoal">Take turns stacking mice into one wobbly tower. Every mouse that tumbles off costs the <b>last dropper</b> a ♥ — you each have <b>3 lives</b>. Lose them all and it’s SQUEAK!</div>' +
+  '<div class="ruleCtl">your mouse <b>sways</b> side to side above the tower<br><b>tap</b> your half of the screen to spin it 45°<br>hit <b>DROP</b> when the dashed line glows green</div>' +
+  '<div class="ruleRow"><span class="rIcon">' + SVG.trap + '</span><span><b>TRAP</b> · played on <b>your</b> turn — drop bait instead of a mouse. The next mouse to touch it gets LAUNCHED sky-high!</span></div>' +
+  '<div class="ruleRow"><span class="rIcon">' + SVG.cheese + '</span><span><b>CHEESE</b> · played on <b>their</b> turn — fly it around with your finger and their swaying mouse chases it wherever it goes!</span></div>' +
+  '<div class="ruleRow"><span class="rIcon">' + SVG.cat + '</span><span><b>CAT PAW</b> · played on <b>their</b> turn — one tap and a paw darts in to SWAT their mouse mid-fall!</span></div>' +
+  '<div class="ruleRow"><span class="rIcon rEmoji">❤️</span><span><b>HEART</b> · floats up after a spill — catch it with a dropping mouse to win the lost life back</span></div>' +
   '<div class="ruleOnce">one 🪤 · one 🧀 · one 🐾 each per game — spend them well!</div>';
 $('rulesMain').innerHTML = RULES_HTML;
-$('rulesFlip').innerHTML = RULES_HTML;
 
 // start / restart
 $('n0').value = S.names[0] === 'Player 1' ? '' : S.names[0];
@@ -1120,7 +1119,6 @@ $('againBtn').addEventListener('click', () => { S.cur = S.loser >= 0 ? S.loser :
 if (AI_ON) {
   $('n1').parentElement.classList.add('hidden');
   $('tableRow').classList.add('hidden');
-  $('rulesFlip').classList.add('hidden'); // no far-side human to read it
   const tag = document.createElement('div');
   tag.textContent = 'VS AI';
   tag.style.cssText = 'position:absolute;top:calc(env(safe-area-inset-top,0px) + 8px);left:10px;z-index:5;' +

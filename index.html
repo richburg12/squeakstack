@@ -73,33 +73,31 @@
     background:#2f7bff; border:none; border-radius:999px; padding:13px 44px; margin-top:8px;
     box-shadow:0 6px 0 #1d55c0; }
   .bigBtn:active { transform:translateY(4px); box-shadow:0 2px 0 #1d55c0; }
-  /* start-screen explainer: same rules block twice - one right-side up for the
-     near player, one rotated 180° so the far player reads it from their edge */
-  #startOv { flex-direction:column; gap:10px; overflow-y:auto; touch-action:pan-y;
-    padding:max(10px, env(safe-area-inset-top,0px)) 10px max(10px, env(safe-area-inset-bottom,0px)); }
-  #rulesFlip { transform:rotate(180deg); flex:none; margin-top:auto;
-    background:#fffaf2; border-radius:22px; padding:11px 14px; width:min(88vw, 380px);
-    box-shadow:0 10px 26px rgba(0,0,0,.2); }
-  #startPanel { flex:none; margin-bottom:auto; padding:15px 18px 18px; }
-  #startPanel h1 { font-size:27px; margin-bottom:7px; }
-  #rulesMain { margin-bottom:11px; }
-  .ruleGoal { font-family:'Fredoka',sans-serif; font-weight:600; font-size:14px;
-    color:#274060; line-height:1.3; text-align:center; }
+  /* start-screen explainer: ONE upright, full-screen rules card — both players
+     hold the phone normally and read it together, then lay the phone flat */
+  #startOv { flex-direction:column; overflow-y:auto; touch-action:pan-y;
+    padding:max(14px, env(safe-area-inset-top,0px)) 12px max(14px, env(safe-area-inset-bottom,0px)); }
+  #startPanel { flex:none; margin:auto 0; padding:22px 22px 24px; width:min(92vw, 430px); }
+  #startPanel h1 { font-size:34px; margin-bottom:2px; }
+  #startPanel .sub { margin:2px 0 14px; }
+  #rulesMain { margin-bottom:14px; }
+  .ruleGoal { font-family:'Fredoka',sans-serif; font-weight:600; font-size:17px;
+    color:#274060; line-height:1.4; text-align:center; }
   .ruleGoal b { color:#ff4f5e; }
-  .ruleCtl { font-weight:800; font-size:11.5px; color:#4e6a8d; line-height:1.4;
-    text-align:center; margin:5px 0 7px; }
+  .ruleCtl { font-weight:800; font-size:14px; color:#4e6a8d; line-height:1.8;
+    text-align:center; margin:12px 0 14px; padding:9px 12px;
+    background:#fff; border:2px solid #e5dccc; border-radius:16px; }
   .ruleCtl b { color:#ff4f9a; }
-  .ruleRow { display:flex; gap:9px; align-items:center; text-align:left;
-    font-weight:700; font-size:12px; color:#3c536e; line-height:1.25; margin-top:6px; }
+  .ruleRow { display:flex; gap:12px; align-items:center; text-align:left;
+    font-weight:700; font-size:13.5px; color:#3c536e; line-height:1.35; margin-top:11px; }
   .ruleRow b { font-family:'Fredoka',sans-serif; font-weight:600; color:#274060; }
-  .rIcon { flex:none; width:27px; height:27px; border-radius:50%; background:#fff;
-    border:2.5px solid #1d2733; color:#1d2733; padding:4px; box-shadow:0 2px 0 rgba(0,0,0,.12); }
+  .rIcon { flex:none; width:36px; height:36px; border-radius:50%; background:#fff;
+    border:2.5px solid #1d2733; color:#1d2733; padding:6px; box-shadow:0 2px 0 rgba(0,0,0,.12); }
   .rIcon svg { width:100%; height:100%; display:block; }
-  .rIcon.rEmoji { display:flex; align-items:center; justify-content:center; font-size:13px; padding:0; }
-  .ruleOnce { font-weight:800; font-size:11px; color:#7a8ba3; text-align:center; margin-top:7px; }
-  #rulesFlip .ruleGoal { font-size:13px; }
-  #rulesFlip .ruleRow { font-size:11px; }
-  #rulesFlip .rIcon { width:24px; height:24px; padding:3.5px; }
+  .rIcon.rEmoji { display:flex; align-items:center; justify-content:center; font-size:18px; padding:0; }
+  .ruleOnce { font-weight:800; font-size:12.5px; color:#7a8ba3; text-align:center; margin-top:13px; }
+  .ruleReady { font-family:'Fredoka',sans-serif; font-weight:600; font-size:16.5px; color:#12b981;
+    text-align:center; line-height:1.35; margin-bottom:14px; }
 
   #overTitle { font-size:26px; }
   #overMsg { font-family:'Fredoka',sans-serif; font-weight:600; font-size:19px; color:#ff4f9a; margin-top:8px; }
@@ -133,10 +131,11 @@
 <button id="mute">🔊</button>
 
 <div class="overlay" id="startOv">
-  <div class="miniPanel" id="rulesFlip"></div>
   <div class="panel" id="startPanel">
     <h1>Squeak<span style="color:#ff4f9a">Stack</span> 🐭</h1>
+    <div class="sub">two players · one wobbly tower of mice</div>
     <div id="rulesMain"></div>
+    <div class="ruleReady">Now lay the phone flat between you — hit Play!</div>
     <div class="nameRow"><span class="dot" style="background:#ff6a3d"></span><input id="n0" maxlength="12" placeholder="Player 1"></div>
     <div class="nameRow"><span class="dot" style="background:#2f7bff"></span><input id="n1" maxlength="12" placeholder="Player 2"></div>
     <label id="tableRow"><input type="checkbox" id="tableChk" checked> phone flat on the table — screen flips each turn</label>
